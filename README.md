@@ -66,9 +66,11 @@ fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 ## Motores independientes
 
 - **KAPTURA / CHRONO** captura, transcodifica y conserva el master localmente.
-- **[UPSKALETOR-by-Ethernium](https://github.com/SteveBlackbeard/UPSKALETOR-by-Ethernium)**
-  ejecuta el escalado neuronal (Real-ESRGAN) en su propio repositorio, instalador,
-  CI y releases firmadas. La pestaña UPSKALETOR hace un traspaso explícito.
+- **UPSKALETOR-by-Ethernium** es un compañero privado opcional que ejecuta el
+  escalado neuronal (Real-ESRGAN) en su propio repositorio, instalador, CI y
+  releases firmadas. La pestaña UPSKALETOR hace un traspaso explícito para
+  operadores autorizados; KAPTURA público funciona sin ese repositorio mediante
+  sus perfiles matemáticos Lanczos y su transcodificación nativa.
 
 ---
 

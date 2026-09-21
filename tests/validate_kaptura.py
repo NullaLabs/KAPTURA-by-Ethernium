@@ -51,16 +51,17 @@ missing = sorted(required_ids.difference(parser.ids))
 if missing:
     fail(f"Missing product tabs: {missing}")
 
-# --- UPSKALETOR independence links ------------------------------------------
-repo = "https://github.com/SteveBlackbeard/UPSKALETOR-by-Ethernium"
-if repo not in parser.links or f"{repo}/releases" not in parser.links:
-    fail("UPSKALETOR repository and signed-release links are required")
+# --- UPSKALETOR public/private boundary -------------------------------------
+if any("UPSKALETOR-by-Ethernium" in link for link in parser.links):
+    fail("Public KAPTURA must not advertise a private UPSKALETOR URL")
+if "optional private companion" not in " ".join(HTML.split()).lower():
+    fail("UPSKALETOR private-companion boundary is required")
 
 # --- honest product-boundary statements (the new truth) ---------------------
 normalized = " ".join(HTML.split()).lower()
 required_contract = [
     "kaptura is the visual capture studio",
-    "upskaletor is the processing engine",
+    "upskaletor is the optional private processing engine",
     "real in-browser transcoding",
     "gif export uses a native javascript encoder",
 ]

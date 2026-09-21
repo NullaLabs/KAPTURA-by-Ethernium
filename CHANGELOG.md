@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- removes obsolete public links to the former owner namespace;
+- labels UPSKALETOR honestly as an optional private companion for authorized
+  operators instead of presenting an inaccessible release as public;
+- updates generated showcase branding to the current NullaLabs namespace;
+- keeps KAPTURA's standalone Lanczos and browser-transcoding paths unchanged.
+
 ## 1.0.0
 
 - preserves the advanced KAPTURA interface, V-CONVERTER and target selector;
