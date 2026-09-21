@@ -129,7 +129,7 @@ def render_broadcast_master_v2(output_dir=None, logo_path=None):
             
             draw.text((cx - 40, cy + 150), "ETHERNIUM", fill=(255, 255, 255))
             draw.text((cx - 130, cy + 180), "BUILT WITH SOVEREIGNTY // NULLA-LABS", fill=(0, 240, 255))
-            draw.text((cx - 100, cy + 210), "github.com/SteveBlackbeard", fill=(255, 215, 0))
+            draw.text((cx - 100, cy + 210), "github.com/NullaLabs", fill=(255, 215, 0))
 
         else:
             # === 38.0s to 40.0s: POST-ROLL BLACK SCREEN (2 FULL SECONDS POST-ROLL) ===

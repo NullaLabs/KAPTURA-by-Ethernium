@@ -10,8 +10,10 @@ PowerShell, uploads the video, or pretends to upscale it.
 2. Open the **UPSKALETOR** tab.
 3. Select the saved master and choose a real UPSKALETOR profile and encoder.
 4. Copy the safe dry-run command or download the JSON handoff manifest.
-5. Install the signed
-   [UPSKALETOR release](https://github.com/SteveBlackbeard/UPSKALETOR-by-Ethernium/releases).
+5. If you are an authorized NullaLabs operator, install the signed private
+   UPSKALETOR release. Public KAPTURA users should use the built-in Lanczos
+   profiles or another independently verified processor; access to the private
+   companion is not bundled or implied.
 6. Place the master in the terminal's working folder and run the dry run.
 7. Run the processing command only after the dry run reports the expected plan.
 

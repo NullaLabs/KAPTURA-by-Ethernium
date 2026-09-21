@@ -66,7 +66,7 @@ def create_fast_broadcast_masters(input_path, output_dir=None, logo_path=None):
         img_outro.paste(resized, (cx - l_size//2, cy - l_size//2), resized)
     draw_outro.text((cx - 40, cy + 150), "ETHERNIUM", fill=(255, 255, 255))
     draw_outro.text((cx - 130, cy + 180), "BUILT WITH SOVEREIGNTY // NULLA-LABS", fill=(0, 240, 255))
-    draw_outro.text((cx - 100, cy + 210), "github.com/SteveBlackbeard", fill=(255, 215, 0))
+    draw_outro.text((cx - 100, cy + 210), "github.com/NullaLabs", fill=(255, 215, 0))
     img_outro.save(outro_img_path)
 
     vsrc = input_path
