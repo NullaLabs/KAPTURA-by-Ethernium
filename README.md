@@ -2,6 +2,9 @@
 
 > **CHRONO Capture Engine · Local-first browser studio con transcodificación REAL**
 
+[![Live Demo](https://img.shields.io/badge/Demo%20en%20Vivo-Abrir%20Studio-00f0ff?style=for-the-badge&logo=googlechrome&logoColor=white)](https://nullalabs.github.io/KAPTURA-by-Ethernium/)
+[![Zero-Cost](https://img.shields.io/badge/Privacy-100%25%20Local--First-green?style=for-the-badge)](https://nullalabs.github.io/KAPTURA-by-Ethernium/)
+
 KAPTURA captura pantalla o pestañas (hasta 4K/120 FPS solicitados con
 `MediaRecorder`) y ahora **procesa el vídeo de verdad dentro del navegador**:
 reescalado Lanczos-3, re-encode nativo a MP4/WebM y un codificador GIF89a
