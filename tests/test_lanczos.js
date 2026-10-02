@@ -30,5 +30,20 @@ const down = resample(src, sw, sh, 8, 8);
 check('downscale length', down.length === 8 * 8 * 4);
 check('downscale color preserved', Math.abs(down[0] - 128) <= 2);
 
+// Vertical orientation invariant: top half red, bottom half blue
+const vSrc = new Uint8ClampedArray(sw * sh * 4);
+for (let y = 0; y < sh; y++) {
+  for (let x = 0; x < sw; x++) {
+    const p = (y * sw + x) * 4;
+    if (y < (sh >> 1)) { vSrc[p] = 255; vSrc[p + 1] = 0; vSrc[p + 2] = 0; vSrc[p + 3] = 255; }
+    else { vSrc[p] = 0; vSrc[p + 1] = 0; vSrc[p + 2] = 255; vSrc[p + 3] = 255; }
+  }
+}
+const vOut = resample(vSrc, sw, sh, 16, 16);
+const topRed = vOut[0] > 200 && vOut[2] < 50;
+const botBlue = vOut[(15 * 16 + 0) * 4 + 2] > 200 && vOut[(15 * 16 + 0) * 4 + 0] < 50;
+check('vertical orientation preserved: top is red', topRed);
+check('vertical orientation preserved: bottom is blue', botBlue);
+
 if (failures) { console.error('\nLANCZOS TEST FAILED (' + failures + ')'); process.exit(1); }
 console.log('\nLANCZOS TEST PASSED');

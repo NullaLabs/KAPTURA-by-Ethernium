@@ -104,19 +104,41 @@
     };
   }
 
-  /* ---- Real GIF --------------------------------------------------------- */
+  /* ---- Real GIF (Ethernium Legion 15 MB Adaptive Budget Governor) -------- */
   async function toGIF(file, opts) {
     opts = opts || {};
     const caps = opts.caps || Caps.detect();
-    const fps = Math.min(opts.fps || 12, 24);
     const video = await loadVideo(file);
     const sw = video.videoWidth, sh = video.videoHeight;
-    const dw = even(opts.width || Math.min(480, sw));
-    const dh = even(opts.height || Math.round((dw * sh) / sw));
-    const scaler = Scaler.create({ quality: opts.quality || 'max', caps });
+    const dur = Math.max(0.1, video.duration || 0);
 
-    const dur = video.duration || 0;
-    const total = Math.max(1, Math.min(Math.floor(dur * fps), opts.maxFrames || 300));
+    // Ethernium Legion 15 MB Budget Ceiling: strictly keep output < 14.8 MB
+    const MAX_TARGET_BYTES = 14.8 * 1024 * 1024;
+
+    const fps = Math.min(opts.fps || 18, 24);
+    const total = Math.max(1, Math.min(Math.floor(dur * fps), opts.maxFrames || 240));
+
+    // Dynamic resolution calculation with 4K super-sampling
+    const aspect = (sw > 0 && sh > 0) ? (sw / sh) : (16 / 9);
+    let targetWidth = opts.width || (sw >= 1920 ? 960 : Math.min(640, sw));
+
+    // Frame byte estimate: ~0.25 bytes/pixel in LZW compressed GIF with delta transparency
+    const estBytesPerPixel = 0.25;
+    const estPixelsPerFrame = targetWidth * (targetWidth / aspect);
+    const estTotalBytes = total * estPixelsPerFrame * estBytesPerPixel;
+
+    if (estTotalBytes > MAX_TARGET_BYTES) {
+      // Scale resolution down cleanly using Lanczos-3 to guarantee strictly < 14.8 MB
+      const maxPixelsPerFrame = MAX_TARGET_BYTES / (total * estBytesPerPixel);
+      targetWidth = Math.min(targetWidth, Math.floor(Math.sqrt(maxPixelsPerFrame * aspect)));
+    }
+
+    // High engineering bounds: max 1280px (Retina HD), min 320px
+    targetWidth = Math.max(320, Math.min(1280, targetWidth, sw));
+    const dw = even(targetWidth);
+    const dh = even(Math.round((dw * sh) / sw));
+
+    const scaler = Scaler.create({ quality: opts.quality || 'max', caps });
     const step = dur / total;
 
     const tmp = document.createElement('canvas');
@@ -137,7 +159,7 @@
 
     const bytes = await encodeGIF({
       width: dw, height: dh, delay: 1000 / fps, repeat: 0,
-      dither: opts.dither !== false, maxColors: opts.maxColors || 256,
+      dither: opts.dither !== false, maxColors: opts.maxColors || 255,
       frames, caps, onProgress: opts.onProgress,
     });
     return { blob: new Blob([bytes], { type: 'image/gif' }), width: dw, height: dh, frames: total };

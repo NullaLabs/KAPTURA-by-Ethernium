@@ -147,9 +147,9 @@
      */
     function resize(source, sw, sh, dw, dh) {
       out.width = dw; out.height = dh;
-      // upload source
+      // upload source (true = upright orientation matching 2D canvas)
       gl.bindTexture(gl.TEXTURE_2D, srcTex);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
 
       const fx = dw < sw ? sw / dw : 1;   // widen kernel when downscaling

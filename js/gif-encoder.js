@@ -104,11 +104,17 @@
     return best;
   }
 
-  /* ---- Map RGBA image -> palette indices, with optional dithering -------- */
-  function mapToIndices(pixels, w, h, palette, dither) {
+  /* ---- Map RGBA image -> palette indices, with delta transparency & smart dither -------- */
+  function mapToIndices(pixels, w, h, palette, dither, prevPixels, transIndex) {
     const out = new Uint8Array(w * h);
     if (!dither) {
       for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+        if (prevPixels && transIndex != null) {
+          const dr = Math.abs(pixels[p] - prevPixels[p]);
+          const dg = Math.abs(pixels[p + 1] - prevPixels[p + 1]);
+          const db = Math.abs(pixels[p + 2] - prevPixels[p + 2]);
+          if (dr + dg + db <= 6) { out[i] = transIndex; continue; }
+        }
         out[i] = nearestColor(palette, pixels[p], pixels[p + 1], pixels[p + 2]);
       }
       return out;
@@ -120,15 +126,32 @@
     }
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const q = (y * w + x) * 3;
+        const idx = y * w + x;
+        const p = idx * 4;
+        const q = idx * 3;
+
+        // Frugal delta comparison against previous frame
+        if (prevPixels && transIndex != null) {
+          const dr = Math.abs(pixels[p] - prevPixels[p]);
+          const dg = Math.abs(pixels[p + 1] - prevPixels[p + 1]);
+          const db = Math.abs(pixels[p + 2] - prevPixels[p + 2]);
+          if (dr + dg + db <= 6) {
+            out[idx] = transIndex;
+            continue;
+          }
+        }
+
         const r = clamp255(work[q]), g = clamp255(work[q + 1]), b = clamp255(work[q + 2]);
-        const idx = nearestColor(palette, r, g, b);
-        out[y * w + x] = idx;
-        const er = r - palette[idx][0], eg = g - palette[idx][1], eb = b - palette[idx][2];
-        spread(work, w, h, x + 1, y, er, eg, eb, 7 / 16);
-        spread(work, w, h, x - 1, y + 1, er, eg, eb, 3 / 16);
-        spread(work, w, h, x, y + 1, er, eg, eb, 5 / 16);
-        spread(work, w, h, x + 1, y + 1, er, eg, eb, 1 / 16);
+        const colorIdx = nearestColor(palette, r, g, b);
+        out[idx] = colorIdx;
+        const er = r - palette[colorIdx][0], eg = g - palette[colorIdx][1], eb = b - palette[colorIdx][2];
+        // Noise gate: only diffuse noticeable error to preserve flat background compressibility
+        if (Math.abs(er) + Math.abs(eg) + Math.abs(eb) > 10) {
+          spread(work, w, h, x + 1, y, er, eg, eb, 7 / 16);
+          spread(work, w, h, x - 1, y + 1, er, eg, eb, 3 / 16);
+          spread(work, w, h, x, y + 1, er, eg, eb, 5 / 16);
+          spread(work, w, h, x + 1, y + 1, er, eg, eb, 1 / 16);
+        }
       }
     }
     return out;
@@ -187,16 +210,18 @@
     /**
      * @param {number} width
      * @param {number} height
-     * @param {object} [opts]  { delay=100 ms, repeat=0 (loop forever), dither=true, maxColors=256, sampleStep=1 }
+     * @param {object} [opts]  { delay=100 ms, repeat=0 (loop forever), dither=true, maxColors=255, delta=true, sampleStep=1 }
      */
     constructor(width, height, opts = {}) {
       this.w = width; this.h = height;
       this.delay = opts.delay != null ? opts.delay : 100;   // ms between frames
       this.repeat = opts.repeat != null ? opts.repeat : 0;  // 0 = infinite
       this.dither = opts.dither !== false;
-      this.maxColors = Math.min(opts.maxColors || 256, 256);
+      this.delta = opts.delta !== false;                    // Frugal delta transparency
+      this.maxColors = Math.min(opts.maxColors || 255, 255);// reserve 1 for transparency
       this.sampleStep = Math.max(1, opts.sampleStep || 1);  // subsample for palette speed
-      this.frames = [];                                     // {indices, palette}
+      this.frames = [];                                     // {indices, palette, transIndex}
+      this.prevRgba = null;
     }
 
     /** Add one RGBA frame (Uint8ClampedArray length w*h*4). */
@@ -205,8 +230,17 @@
       const sample = this.sampleStep > 1 ? subsample(rgba, this.sampleStep) : rgba;
       const palette = medianCut(sample, this.maxColors);
       while (palette.length < 2) palette.push([0, 0, 0]);
-      const indices = mapToIndices(rgba, this.w, this.h, palette, this.dither);
-      this.frames.push({ indices, palette });
+
+      const isFirst = (this.frames.length === 0);
+      const transIndex = (!isFirst && this.delta) ? 255 : null;
+
+      const indices = mapToIndices(
+        rgba, this.w, this.h, palette, this.dither,
+        (!isFirst && this.delta) ? this.prevRgba : null, transIndex
+      );
+
+      this.frames.push({ indices, palette, transIndex });
+      this.prevRgba = new Uint8ClampedArray(rgba);
     }
 
     /** Produce the final GIF bytes (Uint8Array). */
@@ -230,12 +264,19 @@
       const delayCs = Math.max(2, Math.round(this.delay / 10)); // GIF delay is in 1/100 s
 
       for (const frame of this.frames) {
-        const { colorBits, table } = buildLocalColorTable(frame.palette);
+        const { colorBits, table } = buildLocalColorTable(frame.palette, frame.transIndex);
         // Graphic Control Extension (per-frame delay)
         bw.byte(0x21); bw.byte(0xf9); bw.byte(0x04);
-        bw.byte(0x00);            // no transparency, no disposal
-        bw.u16(delayCs);
-        bw.byte(0x00); bw.byte(0x00);
+        if (frame.transIndex != null) {
+          bw.byte(0x05);            // disposal=1 (leave graphic in place), transparent=1
+          bw.u16(delayCs);
+          bw.byte(frame.transIndex);
+        } else {
+          bw.byte(0x04);            // disposal=1 (leave in place), no transparency
+          bw.u16(delayCs);
+          bw.byte(0x00);
+        }
+        bw.byte(0x00);
         // Image Descriptor
         bw.byte(0x2c);
         bw.u16(0); bw.u16(0); bw.u16(this.w); bw.u16(this.h);
@@ -268,10 +309,11 @@
     return new Uint8ClampedArray(kept);
   }
 
-  function buildLocalColorTable(palette) {
+  function buildLocalColorTable(palette, transIndex) {
     // GIF color tables must be a power-of-two size (2..256).
     let bits = 1;
-    while ((1 << bits) < palette.length) bits++;
+    const count = Math.max(palette.length, transIndex != null ? transIndex + 1 : 0);
+    while ((1 << bits) < count) bits++;
     const size = 1 << bits;
     const table = new Uint8Array(size * 3);
     for (let i = 0; i < size; i++) {
