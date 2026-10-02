@@ -359,12 +359,14 @@
     const src = cinemaFile || (lastMaster && lastMaster.blob);
     if (!src) { toast('Arrastra un vídeo o graba uno primero.', 'error'); return; }
     const status = $('cinemaStatus');
+    const speedMode = $('cinemaSpeed') ? $('cinemaSpeed').value : 'normal';
     $('btnCinemaExport').disabled = true;
     try {
       status.textContent = 'Codificando Cinema GIF real…';
       const r = await window.KapturaTranscoder.toGIF(src, {
         caps,
         fps: parseInt($('cinemaFps').value, 10),
+        speedMode,
         width: parseInt($('cinemaWidth').value, 10),
         dither: $('cinemaDither').value === '1',
         quality: caps.gpu.webgl ? 'max' : 'fast',
@@ -375,8 +377,9 @@
       if (cinemaPreviewUrl) URL.revokeObjectURL(cinemaPreviewUrl);
       cinemaPreviewUrl = URL.createObjectURL(r.blob);
       const img = $('cinemaPreview'); img.src = cinemaPreviewUrl; img.style.display = 'inline-block';
-      status.textContent = `✅ Cinema GIF real: ${r.width}×${r.height}, ${r.frames} frames.`;
-      toast('Cinema GIF real generado.', 'success');
+      const durLabel = r.duration ? ` · ${r.duration.toFixed(1)}s` : '';
+      status.textContent = `✅ Cinema GIF real: ${r.width}×${r.height}, ${r.frames} frames${durLabel} (${speedMode === 'normal' ? '1.0x Real-Time' : speedMode}).`;
+      toast('Cinema GIF real generado a velocidad exacta.', 'success');
     } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
     finally { $('btnCinemaExport').disabled = false; setTimeout(() => setProgress('cinemaProgressBarBg', 'cinemaProgressBarFill', 0), 800); }
   });

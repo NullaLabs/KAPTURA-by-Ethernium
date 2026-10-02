@@ -105,7 +105,7 @@
   }
 
   /* ---- Map RGBA image -> palette indices, with delta transparency & smart dither -------- */
-  function mapToIndices(pixels, w, h, palette, dither, prevPixels, transIndex) {
+  function mapToIndices(pixels, w, h, palette, dither, prevPixels, transIndex, noiseGate = 8) {
     const out = new Uint8Array(w * h);
     if (!dither) {
       for (let i = 0, p = 0; i < out.length; i++, p += 4) {
@@ -113,7 +113,7 @@
           const dr = Math.abs(pixels[p] - prevPixels[p]);
           const dg = Math.abs(pixels[p + 1] - prevPixels[p + 1]);
           const db = Math.abs(pixels[p + 2] - prevPixels[p + 2]);
-          if (dr + dg + db <= 6) { out[i] = transIndex; continue; }
+          if (dr + dg + db <= noiseGate) { out[i] = transIndex; continue; }
         }
         out[i] = nearestColor(palette, pixels[p], pixels[p + 1], pixels[p + 2]);
       }
@@ -135,7 +135,7 @@
           const dr = Math.abs(pixels[p] - prevPixels[p]);
           const dg = Math.abs(pixels[p + 1] - prevPixels[p + 1]);
           const db = Math.abs(pixels[p + 2] - prevPixels[p + 2]);
-          if (dr + dg + db <= 6) {
+          if (dr + dg + db <= noiseGate) {
             out[idx] = transIndex;
             continue;
           }
@@ -205,12 +205,12 @@
     return out;
   }
 
-  /* ---- The encoder ------------------------------------------------------- */
+  /* ---- The encoder (Ethernium Sub-Rectangle Motion-Aware GIF Engine) ------ */
   class GIFEncoder {
     /**
      * @param {number} width
      * @param {number} height
-     * @param {object} [opts]  { delay=100 ms, repeat=0 (loop forever), dither=true, maxColors=255, delta=true, sampleStep=1 }
+     * @param {object} [opts]  { delay=100 ms, repeat=0 (loop forever), dither=true, maxColors=255, delta=true, subRect=true, noiseGate=8, sampleStep=1 }
      */
     constructor(width, height, opts = {}) {
       this.w = width; this.h = height;
@@ -218,29 +218,99 @@
       this.repeat = opts.repeat != null ? opts.repeat : 0;  // 0 = infinite
       this.dither = opts.dither !== false;
       this.delta = opts.delta !== false;                    // Frugal delta transparency
+      this.subRect = opts.subRect !== false;                // Sub-rectangle delta bounding box
+      this.noiseGate = opts.noiseGate || 8;                 // Noise floor threshold
       this.maxColors = Math.min(opts.maxColors || 255, 255);// reserve 1 for transparency
       this.sampleStep = Math.max(1, opts.sampleStep || 1);  // subsample for palette speed
-      this.frames = [];                                     // {indices, palette, transIndex}
+      this.frames = [];                                     // {indices, palette, transIndex, x, y, w, h, delay}
       this.prevRgba = null;
     }
 
-    /** Add one RGBA frame (Uint8ClampedArray length w*h*4). */
-    addFrame(rgba) {
-      // Build a per-frame palette (good quality for moving content).
-      const sample = this.sampleStep > 1 ? subsample(rgba, this.sampleStep) : rgba;
+    /** Add one RGBA frame with optional per-frame delay. */
+    addFrame(rgba, frameOpts = {}) {
+      const frameDelay = frameOpts.delay != null ? frameOpts.delay : this.delay;
+      const isFirst = (this.frames.length === 0);
+
+      if (isFirst || !this.delta || !this.prevRgba) {
+        const sample = this.sampleStep > 1 ? subsample(rgba, this.sampleStep) : rgba;
+        const palette = medianCut(sample, this.maxColors);
+        while (palette.length < 2) palette.push([0, 0, 0]);
+        const indices = mapToIndices(rgba, this.w, this.h, palette, this.dither, null, null, this.noiseGate);
+        this.frames.push({
+          indices, palette, transIndex: null,
+          x: 0, y: 0, w: this.w, h: this.h,
+          delay: frameDelay,
+        });
+        this.prevRgba = new Uint8ClampedArray(rgba);
+        return;
+      }
+
+      // Delta frame: calculate changed pixels and bounding box
+      let minX = this.w, maxX = -1, minY = this.h, maxY = -1;
+      let changedCount = 0;
+      for (let y = 0; y < this.h; y++) {
+        const rowOffset = y * this.w;
+        for (let x = 0; x < this.w; x++) {
+          const p = (rowOffset + x) * 4;
+          const diff = Math.abs(rgba[p] - this.prevRgba[p]) +
+                       Math.abs(rgba[p + 1] - this.prevRgba[p + 1]) +
+                       Math.abs(rgba[p + 2] - this.prevRgba[p + 2]);
+          if (diff > this.noiseGate) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            changedCount++;
+          }
+        }
+      }
+
+      // Zero significant motion: accumulate delay onto previous frame (temporal holding)
+      if (changedCount === 0) {
+        if (this.frames.length > 0) {
+          this.frames[this.frames.length - 1].delay += frameDelay;
+        }
+        return;
+      }
+
+      // Sub-rectangle bounding box optimization
+      let frameX = 0, frameY = 0, frameW = this.w, frameH = this.h;
+      let targetRgba = rgba, targetPrev = this.prevRgba;
+
+      if (this.subRect && maxX >= minX && maxY >= minY) {
+        frameX = minX; frameY = minY;
+        frameW = (maxX - minX + 1);
+        frameH = (maxY - minY + 1);
+
+        targetRgba = new Uint8ClampedArray(frameW * frameH * 4);
+        targetPrev = new Uint8ClampedArray(frameW * frameH * 4);
+        for (let sy = 0; sy < frameH; sy++) {
+          const srcY = frameY + sy;
+          const srcRow = (srcY * this.w + frameX) * 4;
+          const dstRow = (sy * frameW) * 4;
+          for (let k = 0; k < frameW * 4; k++) {
+            targetRgba[dstRow + k] = rgba[srcRow + k];
+            targetPrev[dstRow + k] = this.prevRgba[srcRow + k];
+          }
+        }
+      }
+
+      const sample = this.sampleStep > 1 ? subsample(targetRgba, this.sampleStep) : targetRgba;
       const palette = medianCut(sample, this.maxColors);
       while (palette.length < 2) palette.push([0, 0, 0]);
 
-      const isFirst = (this.frames.length === 0);
-      const transIndex = (!isFirst && this.delta) ? 255 : null;
-
+      const transIndex = 255;
       const indices = mapToIndices(
-        rgba, this.w, this.h, palette, this.dither,
-        (!isFirst && this.delta) ? this.prevRgba : null, transIndex
+        targetRgba, frameW, frameH, palette, this.dither,
+        targetPrev, transIndex, this.noiseGate
       );
 
-      this.frames.push({ indices, palette, transIndex });
-      this.prevRgba = new Uint8ClampedArray(rgba);
+      this.frames.push({
+        indices, palette, transIndex,
+        x: frameX, y: frameY, w: frameW, h: frameH,
+        delay: frameDelay,
+      });
+      this.prevRgba.set(rgba);
     }
 
     /** Produce the final GIF bytes (Uint8Array). */
@@ -261,10 +331,10 @@
       bw.u16(this.repeat); // loop count (0 = forever)
       bw.byte(0x00);
 
-      const delayCs = Math.max(2, Math.round(this.delay / 10)); // GIF delay is in 1/100 s
-
       for (const frame of this.frames) {
+        const delayCs = Math.max(2, Math.round(frame.delay / 10)); // GIF delay is in 1/100 s
         const { colorBits, table } = buildLocalColorTable(frame.palette, frame.transIndex);
+
         // Graphic Control Extension (per-frame delay)
         bw.byte(0x21); bw.byte(0xf9); bw.byte(0x04);
         if (frame.transIndex != null) {
@@ -277,11 +347,13 @@
           bw.byte(0x00);
         }
         bw.byte(0x00);
-        // Image Descriptor
+
+        // Image Descriptor with exact sub-rectangle bounds
         bw.byte(0x2c);
-        bw.u16(0); bw.u16(0); bw.u16(this.w); bw.u16(this.h);
+        bw.u16(frame.x); bw.u16(frame.y); bw.u16(frame.w); bw.u16(frame.h);
         bw.byte(0x80 | (colorBits - 1)); // local color table, size
         bw.bytes(table);
+
         // Image data (LZW)
         const minCodeSize = Math.max(2, colorBits);
         bw.byte(minCodeSize);

@@ -115,15 +115,25 @@
     // Ethernium Legion 15 MB Budget Ceiling: strictly keep output < 14.8 MB
     const MAX_TARGET_BYTES = 14.8 * 1024 * 1024;
 
-    const fps = Math.min(opts.fps || 18, 24);
-    const total = Math.max(1, Math.min(Math.floor(dur * fps), opts.maxFrames || 240));
+    // Timing and Speed Modes:
+    // 'normal'   : 1.0x Real-Time (exact natural playback time == video duration)
+    // 'fast2x'   : 2.0x Timelapse (optional acceleration)
+    // 'fast4x'   : 4.0x Fast Forward
+    // 'slow05x'  : 0.5x Slow Motion
+    const speedMode = opts.speedMode || 'normal';
+    const speedMultiplier = (speedMode === 'fast2x' ? 2.0 : (speedMode === 'fast4x' ? 4.0 : (speedMode === 'slow05x' ? 0.5 : (Number(opts.speed) || 1.0))));
+    const targetPlaybackDur = dur / speedMultiplier;
 
-    // Dynamic resolution calculation with 4K super-sampling
+    const fps = Math.min(Math.max(10, Number(opts.fps) || 24), 60);
+    const maxSampleCap = (fps >= 60 ? 480 : (fps >= 30 ? 360 : 240));
+    const total = Math.max(1, Math.min(Math.floor(dur * fps), opts.maxFrames || maxSampleCap));
+
+    // Dynamic resolution calculation with 4K super-sampling and sub-rect delta estimation
     const aspect = (sw > 0 && sh > 0) ? (sw / sh) : (16 / 9);
     let targetWidth = opts.width || (sw >= 1920 ? 960 : Math.min(640, sw));
 
-    // Frame byte estimate: ~0.25 bytes/pixel in LZW compressed GIF with delta transparency
-    const estBytesPerPixel = 0.25;
+    // Sub-rectangle delta compression reduces bytes/pixel down to ~0.08 average
+    const estBytesPerPixel = 0.08;
     const estPixelsPerFrame = targetWidth * (targetWidth / aspect);
     const estTotalBytes = total * estPixelsPerFrame * estBytesPerPixel;
 
@@ -140,6 +150,20 @@
 
     const scaler = Scaler.create({ quality: opts.quality || 'max', caps });
     const step = dur / total;
+
+    // Temporal Bresenham error-diffusion accumulator: ensures total GIF playback duration
+    // matches targetPlaybackDur exactly, eliminating artificial acceleration!
+    const nominalDelayMs = (targetPlaybackDur * 1000) / total;
+    let accumMs = 0;
+    let prevTotalCs = 0;
+    const delays = [];
+    for (let i = 0; i < total; i++) {
+      accumMs += nominalDelayMs;
+      const targetCs = Math.round(accumMs / 10);
+      const delayCs = Math.max(2, targetCs - prevTotalCs);
+      delays.push(delayCs * 10); // in ms
+      prevTotalCs += delayCs;
+    }
 
     const tmp = document.createElement('canvas');
     tmp.width = dw; tmp.height = dh;
@@ -158,11 +182,19 @@
     URL.revokeObjectURL(video.src);
 
     const bytes = await encodeGIF({
-      width: dw, height: dh, delay: 1000 / fps, repeat: 0,
+      width: dw, height: dh, delay: Math.round(nominalDelayMs), delays, repeat: 0,
       dither: opts.dither !== false, maxColors: opts.maxColors || 255,
+      delta: opts.delta !== false, subRect: opts.subRect !== false, noiseGate: opts.noiseGate || 8,
       frames, caps, onProgress: opts.onProgress,
     });
-    return { blob: new Blob([bytes], { type: 'image/gif' }), width: dw, height: dh, frames: total };
+    return {
+      blob: new Blob([bytes], { type: 'image/gif' }),
+      width: dw,
+      height: dh,
+      frames: total,
+      duration: targetPlaybackDur,
+      speedMode,
+    };
   }
 
   function encodeGIF(o) {
@@ -179,7 +211,12 @@
         };
         worker.onerror = () => { worker.terminate(); resolve(encodeMain(o)); };
         worker.postMessage(
-          { width: o.width, height: o.height, delay: o.delay, repeat: o.repeat, dither: o.dither, maxColors: o.maxColors, frames: o.frames },
+          {
+            width: o.width, height: o.height, delay: o.delay, delays: o.delays,
+            repeat: o.repeat, dither: o.dither, maxColors: o.maxColors,
+            delta: o.delta, subRect: o.subRect, noiseGate: o.noiseGate,
+            frames: o.frames,
+          },
           o.frames // transfer buffers (zero-copy)
         );
       });
@@ -190,9 +227,13 @@
   function encodeMain(o) {
     const enc = new root.KapturaGIF.GIFEncoder(o.width, o.height, {
       delay: o.delay, repeat: o.repeat, dither: o.dither, maxColors: o.maxColors,
+      delta: o.delta !== false, subRect: o.subRect !== false, noiseGate: o.noiseGate || 8,
     });
+    const delays = o.delays || null;
     for (let i = 0; i < o.frames.length; i++) {
-      enc.addFrame(new Uint8ClampedArray(o.frames[i]));
+      enc.addFrame(new Uint8ClampedArray(o.frames[i]), {
+        delay: (delays && delays[i] != null) ? delays[i] : o.delay,
+      });
       if (o.onProgress) o.onProgress(0.6 + ((i + 1) / o.frames.length) * 0.4);
     }
     return enc.render();

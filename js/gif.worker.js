@@ -12,9 +12,13 @@ self.onmessage = function (e) {
   try {
     const enc = new self.KapturaGIF.GIFEncoder(d.width, d.height, {
       delay: d.delay, repeat: d.repeat, dither: d.dither, maxColors: d.maxColors,
+      delta: d.delta !== false, subRect: d.subRect !== false, noiseGate: d.noiseGate || 8,
     });
+    const delays = d.delays || null;
     for (let i = 0; i < d.frames.length; i++) {
-      enc.addFrame(new Uint8ClampedArray(d.frames[i]));
+      enc.addFrame(new Uint8ClampedArray(d.frames[i]), {
+        delay: (delays && delays[i] != null) ? delays[i] : d.delay,
+      });
       self.postMessage({ type: 'progress', value: (i + 1) / d.frames.length });
     }
     const bytes = enc.render();

@@ -125,10 +125,25 @@
     </div>
     <div class="progress-bar-bg" id="cinemaProgressBarBg"><div class="progress-bar-fill" id="cinemaProgressBarFill"></div></div>
     <div id="cinemaStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--emerald); margin-top:10px; text-align:center"></div>
-    <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(4, 1fr);">
+    <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(5, 1fr);">
+      <div class="control-card">
+        <div class="control-label">SPEED / TIMING</div>
+        <select id="cinemaSpeed">
+          <option value="normal" selected>⏱️ 1.0x Normal (Tiempo Real)</option>
+          <option value="fast2x">⚡ 2.0x Timelapse (Acelerado)</option>
+          <option value="fast4x">⏩ 4.0x Fast Forward</option>
+          <option value="slow05x">🐢 0.5x Slow-Motion</option>
+        </select>
+      </div>
       <div class="control-card">
         <div class="control-label">FRAME RATE</div>
-        <select id="cinemaFps"><option value="24" selected>24 fps (cinema)</option><option value="18">18 fps</option><option value="12">12 fps (compact)</option></select>
+        <select id="cinemaFps">
+          <option value="60">60 fps (Ultra-Fluido Real)</option>
+          <option value="30">30 fps (Broadcast HD)</option>
+          <option value="24" selected>24 fps (Cinema Real)</option>
+          <option value="18">18 fps (Smooth)</option>
+          <option value="12">12 fps (Compact)</option>
+        </select>
       </div>
       <div class="control-card">
         <div class="control-label">WIDTH</div>
