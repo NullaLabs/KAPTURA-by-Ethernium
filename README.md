@@ -52,13 +52,15 @@ navegador (y varios también en Node para los tests):
 ```
 js/
   capabilities.js   detección de GPU/códecs/workers
-  gif-encoder.js    codificador GIF89a puro (median-cut + LZW)
+  gif-encoder.js    codificador GIF89a puro (median-cut + LZW + delta frugal)
   lanczos.js        resampler Lanczos-3 en CPU
   lanczos-gl.js     resampler Lanczos-3 en GPU (WebGL, 2-pass)
   scaler.js         fachada híbrida GPU/CPU/nativo
-  transcoder.js     re-encode real + toGIF (con worker)
+  transcoder.js     re-encode real + toGIF con presupuesto adaptativo (< 15 MB)
+  compressor.js     compresor inteligente de imagen y vídeo (presupuestos < 15MB, < 8MB, < 2MB)
+  svg-vector.js     vectorizador de imagen a <path> SVG real y SMIL flip-book para vídeo/canvas
   gif.worker.js     encode GIF fuera del hilo principal
-  upskaletor.js     upscale Lanczos real / handoff honesto de IA
+  upskaletor.js     upscale Lanczos real (imagen y vídeo) / handoff honesto de IA
   vault.js          capa IndexedDB (con manejo de cuota)
   capture.js        escenas canvas + captura de pantalla + grabación
   app.js            orquestación de UI (toasts, progreso, sin lógica de motor)
@@ -86,14 +88,15 @@ fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 2. **🌐 SELECT SOURCE** para elegir pantalla/pestaña, o usa un motor Canvas.
 3. Ajusta resolución, FPS, bitrate y formato.
 4. **🔴 START RECORDING** → **⏹️ STOP & SAVE MASTER** (se descarga y se guarda en la Bóveda).
-5. **⚡ V-CONVERTER**: arrastra un vídeo y transcodifícalo de verdad (MP4/WebM/GIF).
-6. **◆ UPSKALETOR**: perfiles Lanczos se procesan aquí; el perfil IA hace handoff.
+5. **🗜️ COMPRESOR**: comprime imágenes o vídeos a límites estrictos (< 15 MB Discord, < 8 MB, < 2 MB).
+6. **🌀 SVG VECTOR**: vectoriza imágenes a trazados `<path>` puros o exporta secuencias animadas SMIL.
+7. **⚡ V-CONVERTER**: arrastra un vídeo y transcodifícalo de verdad (MP4/WebM/GIF).
+8. **◆ UPSKALETOR**: reescala imágenes (PNG) y vídeos con Lanczos-3 a 4K UHD; el perfil IA hace handoff.
 
 ## 🧪 Tests
 
 ```bash
-node tests/test_gif_encoder.js     # valida el GIF89a generado
-node tests/test_lanczos.js         # valida el resampler Lanczos
+npm test                           # ejecuta la suite completa de tests
 python tests/validate_kaptura.py   # contrato estático del producto
 ```
 

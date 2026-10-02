@@ -46,7 +46,7 @@ if dupes:
     fail(f"Duplicate HTML ids: {dupes}")
 
 # --- required product tabs --------------------------------------------------
-required_ids = {"tab-recorder", "tab-cinema", "tab-svg", "tab-vault", "tab-converter", "tab-upskaletor"}
+required_ids = {"tab-recorder", "tab-cinema", "tab-compressor", "tab-svg", "tab-vault", "tab-converter", "tab-upskaletor"}
 missing = sorted(required_ids.difference(parser.ids))
 if missing:
     fail(f"Missing product tabs: {missing}")
@@ -83,7 +83,7 @@ for bad in forbidden:
 # --- modular architecture (no monolith) -------------------------------------
 required_modules = [
     "js/capabilities.js", "js/gif-encoder.js", "js/lanczos.js", "js/lanczos-gl.js",
-    "js/scaler.js", "js/transcoder.js", "js/svg-vector.js", "js/upskaletor.js",
+    "js/scaler.js", "js/transcoder.js", "js/compressor.js", "js/svg-vector.js", "js/upskaletor.js",
     "js/vault.js", "js/capture.js", "js/app.js",
 ]
 for mod in required_modules:

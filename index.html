@@ -33,6 +33,7 @@
   <div class="tab-nav">
     <button class="tab-btn active" data-tab="tab-recorder">🔴 RECORDER STUDIO</button>
     <button class="tab-btn" data-tab="tab-cinema">🎬 CINEMA GIF</button>
+    <button class="tab-btn" data-tab="tab-compressor">🗜️ COMPRESOR</button>
     <button class="tab-btn" data-tab="tab-svg">🌀 SVG VECTOR</button>
     <button class="tab-btn" data-tab="tab-vault">📁 VAULT &amp; HISTORIAL (<span id="vault-count">0</span>)</button>
     <button class="tab-btn" data-tab="tab-converter">⚡ V-CONVERTER</button>
@@ -150,32 +151,90 @@
     <div style="margin-top:18px; text-align:center"><img id="cinemaPreview" alt="" style="max-width:80%; border-radius:12px; display:none; border:1px solid var(--emerald)"></div>
   </div>
 
-  <!-- TAB: SVG VECTOR (real animated SVG exporter) -->
+  <!-- TAB: SMART COMPRESSOR (Image & Video) -->
+  <div id="tab-compressor" class="tab-content">
+    <div style="margin-bottom:16px; font-family:'Fira Code', monospace; font-size:13px; color:var(--muted)">
+      🗜️ COMPRESOR INTELIGENTE · comprime imágenes (PNG/JPG/WebP) y vídeos (MP4/WebM) a límites estrictos (&lt; 15 MB, &lt; 8 MB, &lt; 2 MB o personalizado) preservando la máxima fidelidad 4K sin artefactos. 100% local en tu navegador.
+    </div>
+    <div class="dropzone" id="compressorDropzone" style="border-color:var(--cyan)">
+      <div class="dz-icon" style="color:var(--cyan)">🗜️</div>
+      <div class="dz-title" id="compressorDzTitle">DRAG &amp; DROP IMAGE OR VIDEO TO COMPRESS</div>
+      <div class="dz-sub" id="compressorDzSub">.png · .jpg · .webp · .mp4 · .webm · .mov — optimización adaptativa local</div>
+      <input type="file" id="compressorFileInput" accept="image/*,video/*" style="display:none">
+    </div>
+    <div class="progress-bar-bg" id="compressorProgressBarBg"><div class="progress-bar-fill" id="compressorProgressBarFill" style="background:linear-gradient(90deg, var(--cyan), var(--emerald))"></div></div>
+    <div id="compressorStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--cyan); margin-top:10px; text-align:center"></div>
+    <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(4, 1fr);">
+      <div class="control-card">
+        <div class="control-label">TARGET SIZE BUDGET</div>
+        <select id="compressorBudget">
+          <option value="15" selected>&lt; 15 MB (Discord / Web Max)</option>
+          <option value="8">&lt; 8 MB (Standard Email / Chat)</option>
+          <option value="5">&lt; 5 MB (Strict Social)</option>
+          <option value="2">&lt; 2 MB (Ultra Compact)</option>
+          <option value="1">&lt; 1 MB (Micro Budget)</option>
+        </select>
+      </div>
+      <div class="control-card">
+        <div class="control-label">FORMAT TARGET</div>
+        <select id="compressorFormat">
+          <option value="auto" selected>⚡ Auto (Best for file type)</option>
+          <option value="webp">🌐 WebP (Optimal for images)</option>
+          <option value="jpeg">🖼️ JPEG (Universal image)</option>
+          <option value="mp4">🎬 MP4 (Universal video)</option>
+          <option value="webm">🚀 WebM (VP9 video)</option>
+        </select>
+      </div>
+      <div class="control-card">
+        <div class="control-label">ENGINE QUALITY</div>
+        <select id="compressorQuality">
+          <option value="max" selected>Max (Lanczos-3 Adaptive)</option>
+          <option value="fast">Fast (GPU Hardware)</option>
+        </select>
+      </div>
+      <div class="control-card" style="display:flex; align-items:flex-end">
+        <button class="btn btn-primary" style="width:100%" id="btnCompressNow">COMPRESS (REAL)</button>
+      </div>
+    </div>
+    <div id="compressorResult" style="margin-top:20px; display:none; text-align:center">
+      <div class="proc-readout" id="compressorReadout" style="display:inline-block; text-align:left; max-width:600px; width:100%; margin-bottom:14px"></div>
+      <div style="margin-top:10px">
+        <a id="btnDownloadCompressed" class="btn btn-primary" style="text-decoration:none; display:inline-block" download="kaptura_compressed">💾 DOWNLOAD COMPRESSED</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: SVG VECTOR (real animated SVG & vector path exporter) -->
   <div id="tab-svg" class="tab-content">
     <div style="margin-bottom:16px; font-family:'Fira Code', monospace; font-size:13px; color:var(--muted)">
-      🌀 SVG VECTOR STUDIO · exporta un SVG animado REAL (SMIL flip-book) que se reproduce en cualquier navegador sin JavaScript.
-      <span style="color:var(--gold)">Nota honesta:</span> GitHub sanea SMIL en imágenes embebidas — para GitHub usa el Cinema GIF; el SVG se reproduce en navegador y standalone.
+      🌀 SVG VECTOR STUDIO · exporta vectores reales (trazados &lt;path&gt; con cuantización) para imágenes o SVG animado REAL (SMIL flip-book) para vídeos y escenas canvas.
+      <span style="color:var(--gold)">Nota honesta:</span> GitHub sanea SMIL en imágenes embebidas — para GitHub usa el Cinema GIF; el SVG vectorial estático y el animado se reproducen 100% en navegadores.
     </div>
     <div class="dropzone" id="svgDropzone" style="border-color:var(--emerald)">
       <div class="dz-icon" style="color:var(--emerald)">🌀</div>
-      <div class="dz-title" id="svgDzTitle">DROP VIDEO · O EXPORTA LA ESCENA ACTUAL DEL CANVAS</div>
-      <div class="dz-sub" id="svgDzSub">salida .svg animado — vectorial-friendly, escalable</div>
-      <input type="file" id="svgFileInput" accept="video/*" style="display:none">
+      <div class="dz-title" id="svgDzTitle">DROP VIDEO O IMAGEN · O EXPORTA LA ESCENA ACTUAL</div>
+      <div class="dz-sub" id="svgDzSub">.png · .jpg · .webp · .mp4 · .webm — salida .svg vectorial real</div>
+      <input type="file" id="svgFileInput" accept="video/*,image/*" style="display:none">
     </div>
     <div class="progress-bar-bg" id="svgProgressBarBg"><div class="progress-bar-fill" id="svgProgressBarFill"></div></div>
     <div id="svgStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--emerald); margin-top:10px; text-align:center"></div>
     <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(4, 1fr);">
       <div class="control-card">
         <div class="control-label">SOURCE</div>
-        <select id="svgSource"><option value="scene" selected>Current canvas scene</option><option value="file">Dropped / recorded video</option></select>
+        <select id="svgSource"><option value="scene" selected>Current canvas scene</option><option value="file">Dropped video or image</option></select>
       </div>
       <div class="control-card">
-        <div class="control-label">FRAME RATE</div>
+        <div class="control-label">IMAGE VECTOR MODE</div>
+        <select id="svgVectorMode">
+          <option value="trace_8" selected>Vector Paths (8 Colors)</option>
+          <option value="trace_16">Vector Paths (16 Colors)</option>
+          <option value="trace_4">Vector Paths (4 Colors - Minimal)</option>
+          <option value="container">Scalable HD Master (SVG Container)</option>
+        </select>
+      </div>
+      <div class="control-card">
+        <div class="control-label">FRAME RATE (VIDEO)</div>
         <select id="svgFps"><option value="12" selected>12 fps</option><option value="8">8 fps</option><option value="18">18 fps</option></select>
-      </div>
-      <div class="control-card">
-        <div class="control-label">SECONDS (scene)</div>
-        <select id="svgSeconds"><option value="3" selected>3 s</option><option value="5">5 s</option><option value="2">2 s</option></select>
       </div>
       <div class="control-card" style="display:flex; align-items:flex-end">
         <button class="btn btn-primary" style="width:100%" id="btnSvgExport">EXPORT SVG (REAL)</button>
@@ -254,9 +313,9 @@
 
       <div class="dropzone" id="upskaletorDropzone" style="border-color:var(--violet); background:rgba(139,92,246,0.04)">
         <div class="dz-icon" style="color:var(--violet)">◆</div>
-        <div class="dz-title" id="upskaletorDzTitle">DRAG &amp; DROP VIDEO HERE TO UPSCALE</div>
-        <div class="dz-sub" id="upskaletorDzSub">.mp4 · .webm · .mov · .mkv — o usa tu última grabación</div>
-        <input type="file" id="upskaletorFileInput" accept="video/*" style="display:none">
+        <div class="dz-title" id="upskaletorDzTitle">DRAG &amp; DROP VIDEO OR IMAGE HERE TO UPSCALE</div>
+        <div class="dz-sub" id="upskaletorDzSub">.mp4 · .webm · .mov · .png · .jpg · .webp — o usa tu última grabación</div>
+        <input type="file" id="upskaletorFileInput" accept="video/*,image/*" style="display:none">
       </div>
 
       <div class="progress-bar-bg" id="upskaletorProgressBarBg" style="margin-top:16px"><div class="progress-bar-fill" id="upskaletorProgressBarFill" style="background:linear-gradient(90deg, var(--violet), var(--cyan))"></div></div>
@@ -267,8 +326,10 @@
           <div class="control-label">PROFILE</div>
           <select id="upskaletorProfileSelect">
             <option value="4k_ai" selected>🔥 4K UHD · Real-ESRGAN AI (handoff)</option>
-            <option value="4k_lanczos">🎬 4K UHD · Lanczos (in-browser)</option>
-            <option value="1080p_lanczos">🎬 1080p · Lanczos (in-browser)</option>
+            <option value="4k_lanczos">🎬 4K UHD · Lanczos-3 (in-browser)</option>
+            <option value="2x_super">🔍 2X Super-Resolution (Lanczos-3)</option>
+            <option value="4x_super">🔬 4X Super-Resolution (Lanczos-3)</option>
+            <option value="1080p_lanczos">🎬 1080p · Lanczos-3 (in-browser)</option>
             <option value="twitter_4k">🐦 Twitter/X 4K</option>
             <option value="twitter_1080p">🐦 Twitter/X 1080p</option>
             <option value="youtube_4k">📺 YouTube 4K Master</option>
@@ -316,6 +377,7 @@
 <script src="js/lanczos-gl.js"></script>
 <script src="js/scaler.js"></script>
 <script src="js/transcoder.js"></script>
+<script src="js/compressor.js"></script>
 <script src="js/svg-vector.js"></script>
 <script src="js/upskaletor.js"></script>
 <script src="js/vault.js"></script>

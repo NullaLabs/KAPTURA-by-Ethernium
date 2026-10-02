@@ -241,17 +241,79 @@
     finally { $('btnConvertNow').disabled = false; setTimeout(() => setProgress('progressBarBg', 'progressBarFill', 0), 800); }
   });
 
-  /* ---- UPSKALETOR (real Lanczos or honest AI handoff) ------------------- */
+  /* ---- Smart Compressor (Image & Video) ----------------------------- */
+  let compFile = null, compResultBlob = null;
+  wireDropzone('compressorDropzone', 'compressorFileInput', (f) => {
+    compFile = f;
+    const isImg = window.KapturaSVGVector ? window.KapturaSVGVector.isImageFile(f) : f.type.startsWith('image/');
+    $('compressorDzTitle').textContent = `SELECTED: ${f.name}`;
+    $('compressorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen' : 'Vídeo'} original`;
+  });
+
+  $('btnCompressNow').addEventListener('click', async () => {
+    const file = compFile || (lastMaster && new File([lastMaster.blob], lastMaster.name, { type: lastMaster.mime }));
+    if (!file) { toast('Arrastra una imagen o vídeo primero.', 'error'); return; }
+    const targetMB = parseFloat($('compressorBudget').value) || 15;
+    const fmt = $('compressorFormat').value;
+    const quality = $('compressorQuality').value;
+    const status = $('compressorStatus');
+    const isImg = window.KapturaSVGVector ? window.KapturaSVGVector.isImageFile(file) : file.type.startsWith('image/');
+
+    $('btnCompressNow').disabled = true;
+    $('compressorResult').style.display = 'none';
+    try {
+      let r;
+      if (isImg) {
+        status.textContent = 'Comprimiendo imagen con optimización Lanczos-3…';
+        r = await window.KapturaCompressor.compressImage(file, {
+          targetMB,
+          format: fmt === 'auto' ? (file.type.includes('png') ? 'webp' : 'jpeg') : fmt,
+          quality,
+          onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
+        });
+      } else {
+        status.textContent = 'Comprimiendo vídeo adaptativamente a target budget…';
+        r = await window.KapturaCompressor.compressVideo(file, {
+          targetMB,
+          container: fmt === 'auto' ? 'mp4' : fmt,
+          quality,
+          caps,
+          onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
+        });
+      }
+
+      compResultBlob = r.blob;
+      const origMB = (r.originalSize / (1024 * 1024)).toFixed(2);
+      const compMB = (r.compressedSize / (1024 * 1024)).toFixed(2);
+      const outName = `${baseName(file.name)}_COMPRESSED.${r.ext}`;
+
+      const readout = $('compressorReadout');
+      readout.textContent = `ORIGINAL: ${origMB} MB  →  COMPRIMIDO: ${compMB} MB  ·  AHORRO: -${r.savingsPct}%  (${r.width}×${r.height})`;
+      const dlBtn = $('btnDownloadCompressed');
+      dlBtn.download = outName;
+      dlBtn.onclick = (e) => { e.preventDefault(); downloadBlob(compResultBlob, outName); };
+      $('compressorResult').style.display = 'block';
+
+      downloadBlob(r.blob, outName);
+      await saveToVault(r.blob, outName, isImg ? 'image/' + r.ext : 'video/' + r.ext, 'N/A');
+      status.textContent = `✅ Compresión completada: ${compMB} MB (-${r.savingsPct}%). Guardado en Bóveda.`;
+      toast(`Compresión completada: ahorraste ${r.savingsPct}%.`, 'success');
+    } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
+    finally { $('btnCompressNow').disabled = false; setTimeout(() => setProgress('compressorProgressBarBg', 'compressorProgressBarFill', 0), 800); }
+  });
+
+  /* ---- UPSKALETOR (real Lanczos or honest AI handoff · Image & Video) ---- */
   let upFile = null;
   wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f) => {
     upFile = f;
+    const isImg = window.KapturaUpskaletor.isImageFile(f);
     $('upskaletorDzTitle').textContent = `SELECTED: ${f.name}`;
-    $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${f.type || 'video'}`;
+    $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen' : (f.type || 'video')}`;
   });
 
   $('btnUpscaleNow').addEventListener('click', async () => {
     const file = upFile || (lastMaster && new File([lastMaster.blob], lastMaster.name, { type: lastMaster.mime }));
-    if (!file) { toast('Arrastra un vídeo o graba uno primero.', 'error'); return; }
+    if (!file) { toast('Arrastra un vídeo o imagen primero.', 'error'); return; }
     const profile = $('upskaletorProfileSelect').value;
     const engine = $('upskaletorEngineSelect').value;
     const status = $('upskaletorStatus');
@@ -270,10 +332,10 @@
       } else {
         const name = `${baseName(file.name)}_UPSKALED_${result.width}x${result.height}.${result.ext}`;
         downloadBlob(result.blob, name);
-        await saveToVault(result.blob, name, 'video/' + result.ext, 'N/A');
+        await saveToVault(result.blob, name, (result.isImage ? 'image/' : 'video/') + result.ext, 'N/A');
         if (result.fellBack) toast('MP4 no disponible; guardado WebM real.', 'notice');
         status.textContent = `✅ Escalado real ${result.width}×${result.height} (${result.scaleMode}).`;
-        toast('Upscale real completado y guardado en la Bóveda.', 'success');
+        toast(`Upscale real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');
       }
     } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
     finally { $('btnUpscaleNow').disabled = false; setTimeout(() => setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', 0), 800); }
@@ -319,12 +381,13 @@
     finally { $('btnCinemaExport').disabled = false; setTimeout(() => setProgress('cinemaProgressBarBg', 'cinemaProgressBarFill', 0), 800); }
   });
 
-  /* ---- SVG Vector (real animated SVG) ----------------------------------- */
+  /* ---- SVG Vector (real animated SVG & vector paths) ------------------- */
   let svgFile = null;
   wireDropzone('svgDropzone', 'svgFileInput', (f) => {
     svgFile = f; $('svgSource').value = 'file';
+    const isImg = window.KapturaSVGVector ? window.KapturaSVGVector.isImageFile(f) : false;
     $('svgDzTitle').textContent = `SELECTED: ${f.name}`;
-    $('svgDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${f.type || 'video'}`;
+    $('svgDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen para Vectorizar' : 'Vídeo para SVG animado'}`;
   });
   $('btnSvgExport').addEventListener('click', async () => {
     const status = $('svgStatus');
@@ -336,17 +399,33 @@
       if (source === 'scene') {
         status.textContent = 'Capturando la escena del canvas en SVG animado…';
         r = await window.KapturaSVGVector.fromCanvas(canvas, {
-          caps, fps: parseInt($('svgFps').value, 10), seconds: parseInt($('svgSeconds').value, 10), onProgress,
+          caps, fps: parseInt($('svgFps').value, 10), seconds: 3, onProgress,
         });
+        downloadBlob(r.blob, `Ethernium_Vector_${stamp()}.svg`);
+        status.textContent = `✅ SVG animado real: ${r.width}×${r.height}, ${r.frames} frames.`;
+        toast('SVG Vector real exportado.', 'success');
       } else {
         const src = svgFile || (lastMaster && lastMaster.blob);
-        if (!src) { toast('Arrastra un vídeo o cambia a "Current canvas scene".', 'error'); $('btnSvgExport').disabled = false; return; }
-        status.textContent = 'Exportando vídeo a SVG animado…';
-        r = await window.KapturaSVGVector.fromVideo(src, { caps, fps: parseInt($('svgFps').value, 10), onProgress });
+        if (!src) { toast('Arrastra un vídeo o imagen primero.', 'error'); $('btnSvgExport').disabled = false; return; }
+        const isImg = window.KapturaSVGVector.isImageFile(src);
+
+        if (isImg) {
+          const modeVal = $('svgVectorMode') ? $('svgVectorMode').value : 'trace_8';
+          const mode = modeVal === 'container' ? 'container' : 'trace';
+          const colors = modeVal === 'trace_16' ? 16 : (modeVal === 'trace_4' ? 4 : 8);
+          status.textContent = 'Vectorizando imagen a SVG real…';
+          r = await window.KapturaSVGVector.fromImage(src, { caps, mode, colors, onProgress });
+          downloadBlob(r.blob, `Ethernium_Vector_${baseName(src.name || 'image')}_${stamp()}.svg`);
+          status.textContent = r.mode === 'trace' ? `✅ SVG Vectorial real: ${r.width}×${r.height}, ${r.layers} capas, ${r.totalPaths} trazados.` : `✅ SVG Escalable Master: ${r.width}×${r.height}.`;
+          toast('SVG Vectorial real exportado.', 'success');
+        } else {
+          status.textContent = 'Exportando vídeo a SVG animado…';
+          r = await window.KapturaSVGVector.fromVideo(src, { caps, fps: parseInt($('svgFps').value, 10), onProgress });
+          downloadBlob(r.blob, `Ethernium_Vector_${stamp()}.svg`);
+          status.textContent = `✅ SVG animado real: ${r.width}×${r.height}, ${r.frames} frames.`;
+          toast('SVG animado exportado.', 'success');
+        }
       }
-      downloadBlob(r.blob, `Ethernium_Vector_${stamp()}.svg`);
-      status.textContent = `✅ SVG animado real: ${r.width}×${r.height}, ${r.frames} frames.`;
-      toast('SVG Vector real exportado (se reproduce en navegador).', 'success');
     } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
     finally { $('btnSvgExport').disabled = false; setTimeout(() => setProgress('svgProgressBarBg', 'svgProgressBarFill', 0), 800); }
   });
