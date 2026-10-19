@@ -21,9 +21,9 @@ un historial local en IndexedDB.
 - V-CONVERTER con manifiesto y comando para el helper MP4 incluido;
 - pestaña UPSKALETOR con perfiles y parámetros compatibles con su release v0.6.0.
 
-KAPTURA no sube el vídeo a un servidor. Las tipografías visuales sí se solicitan
-a Google Fonts cuando hay conexión; si no la hay, la interfaz usa fuentes locales
-de reserva.
+KAPTURA es 100% autónoma y opera en régimen Airgap estricto: no sube el vídeo a ningún servidor ni realiza peticiones externas. La interfaz utiliza fuentes locales de silicio y sella cada grabación con recibos Merkle notariales.
+
+
 
 ## Inicio rápido
 
