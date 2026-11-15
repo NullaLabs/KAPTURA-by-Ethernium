@@ -17,6 +17,32 @@ function evenDim(n) {
   return v & ~1;
 }
 
+function pruneOldExports(outputDir, maxAgeMs = 15 * 60 * 1000, maxFiles = 20) {
+  try {
+    if (!fs.existsSync(outputDir)) return;
+    const now = Date.now();
+    const files = fs.readdirSync(outputDir)
+      .filter((name) => !name.startsWith("."))
+      .map((name) => {
+        const full = path.join(outputDir, name);
+        try {
+          const st = fs.statSync(full);
+          return st.isFile() ? { full, mtimeMs: st.mtimeMs } : null;
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    files.forEach((entry, idx) => {
+      if (idx >= maxFiles || now - entry.mtimeMs > maxAgeMs) {
+        try { fs.unlinkSync(entry.full); } catch {}
+      }
+    });
+  } catch {}
+}
+
 function runFfmpegArgs(ffmpegPath, args, onStderrLine) {
   return new Promise((resolve) => {
     const proc = spawn(ffmpegPath, args, { windowsHide: true });
@@ -127,6 +153,7 @@ export async function transcodeMediaTask({
   }
 
   fs.mkdirSync(outputDir, { recursive: true });
+  pruneOldExports(outputDir);
   const taskId = `transcode_${Date.now()}`;
   const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".webm";
   let stagedInput = inputPath ? path.resolve(inputPath) : "";
@@ -134,12 +161,19 @@ export async function transcodeMediaTask({
 
   try {
     if (!stagedInput && inputBuffer) {
+      if (inputBuffer.length === 0) {
+        return { success: false, status: "empty_input", error: "Empty media buffer (0 bytes)." };
+      }
       stagedInput = path.join(outputDir, `${taskId}_in${cleanExt}`);
       fs.writeFileSync(stagedInput, inputBuffer);
       createdTemp = true;
     }
     if (!stagedInput || !fs.existsSync(stagedInput)) {
       return { success: false, status: "missing_input", error: "Input media path or buffer is required." };
+    }
+    const inputStat = fs.statSync(stagedInput);
+    if (inputStat.size === 0) {
+      return { success: false, status: "empty_input", error: "Input media file is empty (0 bytes)." };
     }
 
     if (typeof onProgress === "function") onProgress({ taskId, stage: "PROBING", progress: 15 });
@@ -148,7 +182,12 @@ export async function transcodeMediaTask({
     if (!computedBitrateMbps && targetMB > 0) {
       const dur = await probeDurationSec(backend.ffmpegPath, stagedInput);
       const effectiveDur = dur > 0.2 ? dur : 5;
-      computedBitrateMbps = Math.max(0.25, ((targetMB * 8 * 1024 * 1024 * 0.88) / effectiveDur) / 1e6);
+      const budgetMbps = ((targetMB * 8 * 1024 * 1024 * 0.88) / effectiveDur) / 1e6;
+      const sourceBitrateMbps = ((inputStat.size * 8) / effectiveDur) / 1e6;
+      const cappedMbps = inputStat.size <= targetMB * 1024 * 1024
+        ? Math.min(budgetMbps, sourceBitrateMbps * 0.85)
+        : budgetMbps;
+      computedBitrateMbps = Math.max(0.25, cappedMbps);
     }
 
     const outExt = container === "webm" ? "webm" : "mp4";
@@ -263,6 +302,7 @@ export async function renderVideoTask({
   const framesDir = path.join(workDir, "frames");
   fs.mkdirSync(framesDir, { recursive: true });
   fs.mkdirSync(outputDir, { recursive: true });
+  pruneOldExports(outputDir);
 
   try {
     const [rawW, rawH] = String(resolution).split("x").map(Number);

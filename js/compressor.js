@@ -115,7 +115,7 @@
         const ndw = even(Math.round(dw * scaleFactor));
         const ndh = even(Math.round(dh * scaleFactor));
         canvas.width = ndw; canvas.height = ndh;
-        ctx.drawImage(img, 0, 0, ndw, dh);
+        ctx.drawImage(img, 0, 0, ndw, ndh);
         bestBlob = await new Promise((res) => canvas.toBlob(res, outMime, 0.75));
         scaleFactor -= 0.15;
       }

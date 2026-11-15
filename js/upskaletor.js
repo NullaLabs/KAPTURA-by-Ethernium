@@ -122,17 +122,37 @@
       };
     }
 
-    // Video upscale with Lanczos-3
-    const result = await Transcoder.transcode(file, {
-      width: profile.w || 3840,
-      height: profile.h || 2160,
-      container: 'mp4',
-      bitrateMbps: profile.bitrate || 25,
-      fps: opts.fps || 30,
-      quality: 'max',
-      caps: opts.caps,
-      onProgress: opts.onProgress,
-    });
+    // Video upscale with Lanczos-3 (prefer unified GPU daemon :3370 when online, fallback cleanly to browser)
+    const targetW = profile.w || 3840;
+    const targetH = profile.h || 2160;
+    let result = null;
+    if (root.KapturaDaemon && root.KapturaDaemon.isReadyForTranscode()) {
+      try {
+        result = await root.KapturaDaemon.transcodeViaDaemon(file, {
+          width: targetW,
+          height: targetH,
+          container: 'mp4',
+          bitrateMbps: profile.bitrate || 25,
+          fps: opts.fps || 30,
+          quality: 'max',
+          onProgress: opts.onProgress,
+        });
+      } catch {
+        result = null;
+      }
+    }
+    if (!result) {
+      result = await Transcoder.transcode(file, {
+        width: targetW,
+        height: targetH,
+        container: 'mp4',
+        bitrateMbps: profile.bitrate || 25,
+        fps: opts.fps || 30,
+        quality: 'max',
+        caps: opts.caps,
+        onProgress: opts.onProgress,
+      });
+    }
 
     return {
       mode: 'processed',

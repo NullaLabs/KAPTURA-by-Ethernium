@@ -57,12 +57,21 @@
       chip('GPU Daemon :3370', false, 'id="capDaemon3370"');
 
     if (window.KapturaDaemon && window.KapturaDaemon.probeHealth) {
-      window.KapturaDaemon.probeHealth().then((dh) => {
+      window.KapturaDaemon.probeHealth().then(async (dh) => {
         const el = $('capDaemon3370');
+        const gpuBtn = $('btnGpuRender');
+        const statD = $('statDaemon');
         if (!el || !dh || !dh.online) return;
         const label = dh.hardwareAccelerated ? `NVENC :3370 (${dh.preferredCodec})` : (dh.ffmpegAvailable ? 'Daemon :3370' : 'Daemon :3370 (UI)');
         el.className = 'cap-chip on';
         el.textContent = `● ${label}`;
+        if (gpuBtn && dh.ffmpegAvailable) gpuBtn.disabled = false;
+        if (statD) {
+          const eb = window.KapturaDaemon.fetchEbwpTelemetry ? await window.KapturaDaemon.fetchEbwpTelemetry() : null;
+          const ebSuffix = eb && eb.ok ? ` · EBWP ${eb.byteLength}B (${eb.magic})` : '';
+          statD.style.color = 'var(--emerald)';
+          statD.textContent = `${dh.hardwareAccelerated ? dh.preferredCodec.toUpperCase() : 'FFMPEG'} :3370${ebSuffix}`;
+        }
       });
     }
   })();
@@ -179,6 +188,44 @@
   });
   $('btnStopRec').addEventListener('click', () => capture.stopRecording());
 
+  if ($('btnGpuRender')) {
+    $('btnGpuRender').addEventListener('click', async () => {
+      if (!window.KapturaDaemon || !window.KapturaDaemon.isReadyForTranscode()) {
+        toast('GPU Daemon :3370 con FFmpeg no está disponible.', 'error');
+        return;
+      }
+      const btn = $('btnGpuRender');
+      const readout = $('recorderReadout');
+      const res = $('resSelect').value;
+      const fps = Math.min(60, Math.max(15, parseInt($('fpsSelect').value, 10) || 30));
+      const mode = $('modeSelect').value.toUpperCase();
+      btn.disabled = true;
+      readout.textContent = `Renderizando clip GPU (:3370 · ${res} @ ${fps}fps)…`;
+      try {
+        const r = await window.KapturaDaemon.renderViaDaemon({
+          prompt: `ETHERNIUM STUDIO // ${mode}`,
+          durationSec: 2,
+          resolution: res,
+          fps,
+          quality: 'high',
+          onProgress: (p) => { readout.textContent = `GPU Render :3370 — ${Math.round(p * 100)}%`; },
+        });
+        const name = `Ethernium_GPU_Render_${stamp()}.mp4`;
+        lastMaster = { blob: r.blob, ext: 'mp4', mime: 'video/mp4', name };
+        $('statSize').textContent = (r.blob.size / (1024 * 1024)).toFixed(2) + ' MB';
+        $('statSourceMode').textContent = `GPU :3370 (${r.codec})`;
+        downloadBlob(r.blob, name);
+        await saveToVault(r.blob, name, 'video/mp4', r.duration);
+        toast(`Clip GPU real (${r.codec}, ${(r.blob.size / 1024).toFixed(1)} KB) guardado en Bóveda.`, 'success');
+      } catch (e) {
+        toast(e.message || String(e), 'error');
+      } finally {
+        btn.disabled = false;
+        readout.textContent = '';
+      }
+    });
+  }
+
   /* ---- Export menu (real re-encode / real GIF) -------------------------- */
   $('btnExportMenu').addEventListener('click', () => $('exportMenu').classList.toggle('show'));
   $('exportMenu').querySelectorAll('[data-fmt]').forEach((item) => {
@@ -198,11 +245,30 @@
         downloadBlob(r.blob, `Ethernium_${stamp()}.gif`);
         toast(`GIF real: ${r.width}×${r.height}, ${r.frames} frames.`, 'success');
       } else {
-        readout.textContent = `Re-encode real a ${fmt.toUpperCase()}…`;
-        const r = await window.KapturaTranscoder.transcode(lastMaster.blob, {
-          caps, container: fmt, quality: 'fast',
-          onProgress: (p) => { readout.textContent = `${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
-        });
+        const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
+        readout.textContent = useDaemon
+          ? `Re-encode GPU :3370 a ${fmt.toUpperCase()}…`
+          : `Re-encode real a ${fmt.toUpperCase()}…`;
+        let r;
+        if (useDaemon) {
+          try {
+            const masterFile = new File([lastMaster.blob], lastMaster.name, { type: lastMaster.mime });
+            r = await window.KapturaDaemon.transcodeViaDaemon(masterFile, {
+              container: fmt, quality: 'fast',
+              onProgress: (p) => { readout.textContent = `GPU :3370 ${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
+            });
+          } catch {
+            r = await window.KapturaTranscoder.transcode(lastMaster.blob, {
+              caps, container: fmt, quality: 'fast',
+              onProgress: (p) => { readout.textContent = `${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
+            });
+          }
+        } else {
+          r = await window.KapturaTranscoder.transcode(lastMaster.blob, {
+            caps, container: fmt, quality: 'fast',
+            onProgress: (p) => { readout.textContent = `${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
+          });
+        }
         if (r.fellBack) toast('MP4 no disponible; exportado en WebM real.', 'notice');
         downloadBlob(r.blob, `Ethernium_${stamp()}.${r.ext}`);
         toast(`Exportado ${r.ext.toUpperCase()} real (${r.scaleMode}).`, 'success');
@@ -221,7 +287,8 @@
   });
 
   $('btnConvertNow').addEventListener('click', async () => {
-    if (!convFile) { toast('Selecciona o arrastra un vídeo primero.', 'error'); return; }
+    const srcFile = convFile || (lastMaster && new File([lastMaster.blob], lastMaster.name, { type: lastMaster.mime }));
+    if (!srcFile) { toast('Selecciona, arrastra o graba un vídeo primero.', 'error'); return; }
     const fmt = $('convFormat').value;
     const res = $('convRes').value;
     const quality = $('convQuality').value;
@@ -231,11 +298,11 @@
     try {
       if (fmt === 'gif') {
         status.textContent = 'Codificando GIF real…';
-        const r = await window.KapturaTranscoder.toGIF(convFile, {
+        const r = await window.KapturaTranscoder.toGIF(srcFile, {
           caps, quality, ...dims,
           onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `GIF ${Math.round(p * 100)}%`; },
         });
-        downloadBlob(r.blob, `${baseName(convFile.name)}_${r.width}x${r.height}.gif`);
+        downloadBlob(r.blob, `${baseName(srcFile.name)}_${r.width}x${r.height}.gif`);
         status.textContent = `✅ GIF real listo (${r.frames} frames).`;
       } else {
         const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
@@ -245,18 +312,18 @@
         let r;
         if (useDaemon) {
           try {
-            r = await window.KapturaDaemon.transcodeViaDaemon(convFile, {
+            r = await window.KapturaDaemon.transcodeViaDaemon(srcFile, {
               container: fmt, quality, ...dims,
               onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `GPU :3370 ${Math.round(p * 100)}%`; },
             });
           } catch {
-            r = await window.KapturaTranscoder.transcode(convFile, {
+            r = await window.KapturaTranscoder.transcode(srcFile, {
               caps, container: fmt, quality, ...dims,
               onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
             });
           }
         } else {
-          r = await window.KapturaTranscoder.transcode(convFile, {
+          r = await window.KapturaTranscoder.transcode(srcFile, {
             caps, container: fmt, quality, ...dims,
             onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
           });
@@ -264,7 +331,7 @@
         if (r.fellBack) toast('MP4 no soportado aquí; exportado WebM real.', 'notice');
         const outW = r.width || dims.width || 'src';
         const outH = r.height || dims.height || 'src';
-        downloadBlob(r.blob, `${baseName(convFile.name)}_${outW}x${outH}.${r.ext}`);
+        downloadBlob(r.blob, `${baseName(srcFile.name)}_${outW}x${outH}.${r.ext}`);
         status.textContent = `✅ ${r.ext.toUpperCase()} real listo (${r.scaleMode}).`;
       }
       toast('Conversión real completada.', 'success');

@@ -67,7 +67,11 @@ async function run() {
     assert.equal(traversalRes.status, 404, "Encoded path traversal outside exports/ must be blocked");
     const rootPkgRes = await httpRequest(port, "/package.json");
     assert.equal(rootPkgRes.status, 404, "Non-public root package.json must not be exposed");
-    console.log("  PASS  Daemon /health, /status, /telemetry/ebwp, UI serve & traversal guard");
+    const badJsonRes = await httpRequest(port, "/render", "POST", { "Content-Type": "application/json" }, "{bad-json");
+    assert.equal(badJsonRes.status, 400, "Malformed JSON on /render must return 400 Bad Request");
+    const emptyTxRes = await httpRequest(port, "/transcode?download=1", "POST", { "Accept": "application/octet-stream" }, Buffer.alloc(0));
+    assert.equal(emptyTxRes.status, 400, "Empty body on /transcode must return 400 Bad Request");
+    console.log("  PASS  Daemon /health, /status, /telemetry/ebwp, UI serve, validation & traversal guard");
 
     if (health.capabilities && health.capabilities.ffmpegAvailable) {
       const renderPayload = JSON.stringify({

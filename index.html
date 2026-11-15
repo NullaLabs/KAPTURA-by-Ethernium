@@ -33,9 +33,9 @@
   <div class="tab-nav">
     <button class="tab-btn active" data-tab="tab-recorder">🔴 RECORDER STUDIO</button>
     <button class="tab-btn" data-tab="tab-cinema">🎬 CINEMA GIF</button>
-    <button class="tab-btn" data-tab="tab-compressor">🗜️ COMPRESOR</button>
+    <button class="tab-btn" data-tab="tab-compressor">▣ COMPRESOR</button>
     <button class="tab-btn" data-tab="tab-svg">🌀 SVG VECTOR</button>
-    <button class="tab-btn" data-tab="tab-vault">📁 VAULT &amp; HISTORIAL (<span id="vault-count">0</span>)</button>
+    <button class="tab-btn" data-tab="tab-vault">📁 VAULT (<span id="vault-count">0</span>)</button>
     <button class="tab-btn" data-tab="tab-converter">⚡ V-CONVERTER</button>
     <button class="tab-btn" data-tab="tab-upskaletor">◆ UPSKALETOR AI</button>
   </div>
@@ -97,11 +97,12 @@
     </div>
 
     <div class="btn-group">
-      <button class="btn btn-secondary" id="btnSelectSource">🌐 SELECT SOURCE (TAB/SCREEN)</button>
+      <button class="btn btn-secondary" id="btnSelectSource">🌐 SELECT SOURCE</button>
       <button class="btn btn-primary" id="btnStartRec">🔴 START RECORDING</button>
-      <button class="btn btn-danger" id="btnStopRec" disabled>⏹️ STOP &amp; SAVE MASTER</button>
+      <button class="btn btn-danger" id="btnStopRec" disabled>⏹️ STOP &amp; SAVE</button>
+      <button class="btn btn-secondary" id="btnGpuRender" disabled title="Genera clip MP4 NVENC directo usando el daemon local :3370">⚡ GPU RENDER (:3370)</button>
       <div class="export-dropdown">
-        <button class="btn btn-secondary" id="btnExportMenu">💾 EXPORT IN FORMAT ▼</button>
+        <button class="btn btn-secondary" id="btnExportMenu">💾 EXPORT FORMAT ▼</button>
         <div class="export-menu" id="exportMenu">
           <div class="export-item" data-fmt="mp4"><span>🎬 Master MP4</span> <span class="fmt-tag">real re-encode</span></div>
           <div class="export-item" data-fmt="webm"><span>🌐 WebM Stream</span> <span class="fmt-tag">real re-encode</span></div>
@@ -382,6 +383,7 @@
     <div>RECORDED FRAMES: <span class="stat-val" id="statFrames">0</span></div>
     <div>BUFFER SIZE: <span class="stat-val" id="statSize">0.0 MB</span></div>
     <div>SOURCE: <span class="stat-val" id="statSourceMode" style="color:var(--emerald)">CANVAS ENGINE</span></div>
+    <div>DAEMON: <span class="stat-val" id="statDaemon" style="color:var(--muted)">STATIC (BROWSER)</span></div>
   </div>
 </div>
 

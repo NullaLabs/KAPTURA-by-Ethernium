@@ -55,17 +55,18 @@
 
   /* STUDIO TABS */
   .tab-nav {
-    display: flex; gap: 12px; margin-bottom: 24px;
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px;
     border-bottom: 1px solid rgba(255,255,255,0.06);
     padding-bottom: 12px;
   }
   .tab-btn {
     font-family: 'Fira Code', monospace;
-    font-size: 13px; font-weight: 700; letter-spacing: 2px;
-    padding: 10px 22px; border-radius: 12px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px;
+    padding: 9px 10px; border-radius: 12px;
     background: rgba(255,255,255,0.03);
     border: 1px solid var(--border);
     color: var(--muted); cursor: pointer;
+    white-space: nowrap; flex: 1 1 0; text-align: center;
     transition: all 0.25s ease;
   }
   .tab-btn:hover { color: var(--white); background: rgba(255,255,255,0.08); }
@@ -157,16 +158,16 @@
 
   /* BUTTONS */
   .btn-group {
-    display: flex; gap: 16px; align-items: center; justify-content: flex-start;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-start;
   }
 
   .btn {
     font-family: 'Orbitron', monospace;
-    font-weight: 700; font-size: 13px; letter-spacing: 2px;
-    padding: 14px 28px; border-radius: 12px;
-    border: none; cursor: pointer;
+    font-weight: 700; font-size: 12px; letter-spacing: 1.5px;
+    padding: 12px 20px; border-radius: 12px;
+    border: none; cursor: pointer; white-space: nowrap;
     transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
   }
 
   .btn-primary {
@@ -188,7 +189,7 @@
   }
   .btn-danger:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 0 30px rgba(255,51,85,0.6); }
 
-  .btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
 
   /* MULTI-FORMAT DOWNLOAD MODAL / DROPDOWN */
   .export-dropdown {
@@ -315,6 +316,7 @@
   }
   @media (max-width: 900px) {
     .tab-nav { flex-wrap: wrap; }
+    .tab-btn { flex: 1 1 auto; }
     .controls-grid, .engine-grid { grid-template-columns: 1fr; }
   }
 

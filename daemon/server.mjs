@@ -179,7 +179,10 @@ export function createKapturaDaemon({
           quality,
         });
 
-        if (!result.success) return sendJson(res, 422, result);
+        if (!result.success) {
+          const code = result.status === "empty_input" || result.status === "missing_input" ? 400 : 422;
+          return sendJson(res, code, result);
+        }
         if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
           const ext = path.extname(result.outputFile).toLowerCase();
           res.writeHead(200, {
@@ -188,7 +191,11 @@ export function createKapturaDaemon({
             "X-Kaptura-Codec": result.codec || "",
             "X-Kaptura-HW": String(Boolean(result.hardwareAccelerated)),
           });
-          return fs.createReadStream(result.videoPath).pipe(res);
+          const fileStream = fs.createReadStream(result.videoPath);
+          fileStream.once("close", () => {
+            try { if (fs.existsSync(result.videoPath)) fs.unlinkSync(result.videoPath); } catch {}
+          });
+          return fileStream.pipe(res);
         }
         return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
       } catch (err) {
@@ -199,7 +206,14 @@ export function createKapturaDaemon({
     if (req.method === "POST" && pathname === "/render") {
       try {
         const raw = await readRequestBody(req, 64 * 1024 * 1024);
-        const body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+        let body = {};
+        if (raw.length) {
+          try {
+            body = JSON.parse(raw.toString("utf8"));
+          } catch {
+            return sendJson(res, 400, { success: false, error: "Invalid JSON payload" });
+          }
+        }
         const result = await renderVideoTask({
           prompt: body.prompt || "Ethernium Sovereign Composition",
           durationSec: body.durationSec ?? body.duration ?? 2,

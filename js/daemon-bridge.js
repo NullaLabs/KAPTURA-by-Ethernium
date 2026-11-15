@@ -104,12 +104,67 @@
     };
   }
 
+  async function renderViaDaemon(opts) {
+    opts = opts || {};
+    if (typeof opts.onProgress === 'function') opts.onProgress(0.2);
+    const res = await fetch(`${DAEMON_BASE}/render`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: opts.prompt || 'ETHERNIUM SOVEREIGN STUDIO',
+        durationSec: opts.durationSec || 2,
+        resolution: opts.resolution || '1280x720',
+        fps: opts.fps || 30,
+        quality: opts.quality || 'high',
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || !data.success || !data.downloadUrl) {
+      throw new Error((data && data.error) || `Daemon :3370 render failed (HTTP ${res.status})`);
+    }
+    if (typeof opts.onProgress === 'function') opts.onProgress(0.75);
+    const binRes = await fetch(`${DAEMON_BASE}${data.downloadUrl}`);
+    if (!binRes.ok) throw new Error(`Failed downloading rendered clip (HTTP ${binRes.status})`);
+    const blob = await binRes.blob();
+    if (typeof opts.onProgress === 'function') opts.onProgress(1);
+    const [rw, rh] = String(data.resolution || opts.resolution || '1280x720').split('x').map(Number);
+    return {
+      blob,
+      ext: 'mp4',
+      mime: 'video/mp4',
+      width: rw || 1280,
+      height: rh || 720,
+      duration: data.duration || opts.durationSec || 2,
+      codec: data.codec || 'h264',
+      hardwareAccelerated: Boolean(data.hardwareAccelerated),
+      viaDaemon: true,
+    };
+  }
+
+  async function fetchEbwpTelemetry(timeoutMs = 800) {
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+      const res = await fetch(`${DAEMON_BASE}/telemetry/ebwp`, {
+        method: 'GET',
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
   const api = {
     DAEMON_BASE,
     probeHealth,
     getCachedHealth,
     isReadyForTranscode,
     transcodeViaDaemon,
+    renderViaDaemon,
+    fetchEbwpTelemetry,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

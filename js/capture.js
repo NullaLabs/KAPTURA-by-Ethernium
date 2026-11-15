@@ -33,8 +33,7 @@
 
     // scene state
     let helixAngle = 0;
-    const matrixCols = 80;
-    const matrixDrops = new Array(matrixCols).fill(0);
+    const matrixDrops = [];
 
     function drawScene(now) {
       // fps measurement
@@ -49,6 +48,7 @@
         ctx.fillStyle = 'rgba(2, 3, 5, 0.25)'; ctx.fillRect(0, 0, W, H);
         helixAngle += 0.025;
         const numPairs = 45, radius = H * 0.21, length = W * 0.62;
+        const nodeScale = Math.max(0.45, H / 1440);
         for (let i = 0; i < numPairs; i++) {
           const offset = (i / numPairs) * Math.PI * 6 + helixAngle;
           const x = cx - length / 2 + (i / numPairs) * length;
@@ -56,45 +56,60 @@
           const y2 = cy + Math.sin(offset + Math.PI) * radius;
           const z1 = Math.cos(offset), z2 = Math.cos(offset + Math.PI);
           ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, y2);
-          ctx.lineWidth = 4 + z1 * 2;
-          ctx.strokeStyle = `rgba(0, 240, 255, ${0.4 + z1 * 0.3})`;
-          ctx.shadowColor = '#00F0FF'; ctx.shadowBlur = 15; ctx.stroke();
-          ctx.beginPath(); ctx.arc(x, y1, 14 + z1 * 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#00FF9D'; ctx.shadowColor = '#00FF9D'; ctx.shadowBlur = 20; ctx.fill();
-          ctx.beginPath(); ctx.arc(x, y2, 14 + z2 * 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#8B5CF6'; ctx.shadowColor = '#8B5CF6'; ctx.shadowBlur = 20; ctx.fill();
+          ctx.lineWidth = Math.max(1.5, (3 + z1 * 1.5) * nodeScale);
+          ctx.strokeStyle = `rgba(0, 240, 255, ${0.42 + z1 * 0.3})`;
+          ctx.stroke();
+
+          const r1 = Math.max(3, (12 + z1 * 5) * nodeScale);
+          ctx.beginPath(); ctx.arc(x, y1, r1, 0, Math.PI * 2);
+          ctx.fillStyle = '#00FF9D'; ctx.fill();
+
+          const r2 = Math.max(3, (12 + z2 * 5) * nodeScale);
+          ctx.beginPath(); ctx.arc(x, y2, r2, 0, Math.PI * 2);
+          ctx.fillStyle = '#8B5CF6'; ctx.fill();
         }
-        ctx.shadowBlur = 0;
       } else if (sceneMode === 'binary') {
-        ctx.fillStyle = 'rgba(1, 2, 4, 0.15)'; ctx.fillRect(0, 0, W, H);
-        ctx.font = '28px "Fira Code", monospace';
-        for (let i = 0; i < matrixCols; i++) {
+        ctx.fillStyle = 'rgba(1, 2, 4, 0.16)'; ctx.fillRect(0, 0, W, H);
+        const fontPx = Math.max(16, Math.round(H * 0.026));
+        const cols = Math.max(24, Math.floor(W / fontPx));
+        if (matrixDrops.length !== cols) {
+          matrixDrops.length = cols;
+          for (let k = 0; k < cols; k++) if (matrixDrops[k] === undefined) matrixDrops[k] = Math.floor(Math.random() * 20);
+        }
+        ctx.font = `${fontPx}px "Fira Code", monospace`;
+        ctx.fillStyle = '#00FF9D';
+        for (let i = 0; i < cols; i++) {
           const char = String.fromCharCode(0x30 + Math.floor(Math.random() * 2));
-          const x = i * (W / matrixCols), y = matrixDrops[i] * 36;
-          ctx.fillStyle = '#00FF9D'; ctx.shadowColor = '#00FF9D'; ctx.shadowBlur = 10;
+          const x = i * (W / cols), y = matrixDrops[i] * (fontPx * 1.25);
           ctx.fillText(char, x, y);
-          if (y > H && Math.random() > 0.975) matrixDrops[i] = 0;
+          if (y > H && Math.random() > 0.965) matrixDrops[i] = 0;
           matrixDrops[i]++;
         }
-        ctx.shadowBlur = 0;
       } else if (sceneMode === 'fibonacci') {
-        const a = 12, b = 0.18, t = frameCount / 60;
-        ctx.lineWidth = 3;
-        for (let i = 0; i < 400; i++) {
-          const theta = i * 0.1 + t * 0.5;
+        ctx.fillStyle = 'rgba(1, 2, 4, 0.14)'; ctx.fillRect(0, 0, W, H);
+        const a = Math.max(5, H * 0.009), b = 0.175, t = frameCount / 60;
+        const dotScale = Math.max(0.45, H / 1440);
+        for (let i = 0; i < 320; i++) {
+          const theta = i * 0.11 + t * 0.55;
           const r = a * Math.exp(b * (i * 0.1));
           const x = cx + r * Math.cos(theta), y = cy + r * Math.sin(theta);
-          ctx.beginPath(); ctx.arc(x, y, 6 + (i * 0.05), 0, Math.PI * 2);
-          ctx.fillStyle = `hsl(${(i * 4 + t * 50) % 360}, 100%, 65%)`;
-          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 15; ctx.fill();
+          ctx.beginPath(); ctx.arc(x, y, Math.max(2, (4 + i * 0.04) * dotScale), 0, Math.PI * 2);
+          ctx.fillStyle = `hsl(${(i * 4 + t * 50) % 360}, 100%, 62%)`;
+          ctx.fill();
         }
-        ctx.shadowBlur = 0;
       }
 
-      // HONEST overlay: real measured fps, real resolution
-      ctx.font = '700 32px "Orbitron", monospace';
+      // HONEST overlay on opaque backdrop so trailing frames never smear the digits
+      const osdFont = Math.max(16, Math.round(H * 0.024));
+      const padX = Math.max(20, Math.round(W * 0.018));
+      const padY = Math.max(36, Math.round(H * 0.05));
+      const osdText = `ETHERNIUM // ${W}x${H} @ ${measuredFps} FPS (measured)`;
+      ctx.font = `700 ${osdFont}px "Orbitron", monospace`;
+      const tw = ctx.measureText(osdText).width;
+      ctx.fillStyle = 'rgba(2, 4, 10, 0.92)';
+      ctx.fillRect(padX - 10, padY - osdFont - 6, tw + 20, osdFont + 16);
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(`ETHERNIUM // ${W}x${H} @ ${measuredFps} FPS (measured)`, 60, 80);
+      ctx.fillText(osdText, padX, padY);
 
       frameCount++;
       emit('onFps', measuredFps);
@@ -133,11 +148,17 @@
       }
     }
 
+    function safeCanvasBitrateBps(requestedMbps, width) {
+      const capMbps = width >= 3840 ? 45 : (width >= 1920 ? 25 : 14);
+      return Math.max(1, Math.min(Number(requestedMbps) || 16, capMbps)) * 1e6;
+    }
+
     function startRecording(opts) {
       opts = opts || {};
       const caps = opts.caps || Caps.detect();
       const fps = opts.fps || 60;
-      const bitrate = (opts.bitrateMbps || 50) * 1e6;
+      const requestedMbps = opts.bitrateMbps || 50;
+      const bitrate = sceneMode === 'screen' ? requestedMbps * 1e6 : safeCanvasBitrateBps(requestedMbps, canvas.width);
       const pick = Caps.pickMimeType(caps, opts.container || 'mp4');
 
       const streamToRecord = (sceneMode === 'screen' && mediaStream)
@@ -160,7 +181,7 @@
         }
       };
       recorder.onstop = () => finishRecording(pick);
-      recorder.start(500);
+      recorder.start(250);
 
       recStart = Date.now();
       const startFrame = frameCount;
@@ -178,16 +199,23 @@
     }
 
     function stopRecording() {
-      if (recorder && recorder.state !== 'inactive') recorder.stop();
+      if (!recorder || recorder.state === 'inactive') return;
+      try { recorder.requestData(); } catch { /* optional */ }
+      recorder.stop();
     }
 
     function finishRecording(pick) {
       clearInterval(recTimer);
       const mime = recorder.mimeType || pick.mime;
       const ext = mime.includes('mp4') ? 'mp4' : 'webm';
-      const duration = Math.floor((Date.now() - recStart) / 1000);
-      const blob = new Blob(chunks, { type: mime });
+      const duration = Math.max(1, Math.floor((Date.now() - recStart) / 1000));
+      const totalBytes = chunks.reduce((a, c) => a + (c ? c.size : 0), 0);
       emit('onRecordingState', false);
+      if (totalBytes === 0) {
+        emit('onError', 'El codificador MediaRecorder del navegador devolvió 0 bytes. Cambia a WebM (VP9) / menor FPS o usa RENDER GPU (:3370).');
+        return;
+      }
+      const blob = new Blob(chunks, { type: mime });
       emit('onStop', { blob, mime, ext, duration });
     }
 
