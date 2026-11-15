@@ -156,6 +156,9 @@ export function createKapturaDaemon({
     if (req.method === "POST" && pathname === "/transcode") {
       try {
         const raw = await readRequestBody(req);
+        if (!raw.length) {
+          return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+        }
         const h = req.headers;
         const container = String(h["x-kaptura-container"] || url.searchParams.get("container") || "mp4");
         const inputExt = String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".webm");

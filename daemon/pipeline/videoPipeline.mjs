@@ -147,6 +147,14 @@ export async function transcodeMediaTask({
   textOverlay = "",
   onProgress,
 }) {
+  if (!inputPath) {
+    if (!inputBuffer) {
+      return { success: false, status: "missing_input", error: "Input media path or buffer is required." };
+    }
+    if (inputBuffer.length === 0) {
+      return { success: false, status: "empty_input", error: "Empty media buffer (0 bytes)." };
+    }
+  }
   const backend = detectVideoBackend();
   if (!backend.available || !backend.ffmpegPath) {
     return { success: false, status: "ffmpeg_unavailable", error: "FFmpeg binary not detected on host." };
