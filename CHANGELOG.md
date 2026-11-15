@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.0
+
+- unifies the browser CHRONO Studio with the local GPU/FFmpeg `:3370` daemon (`daemon/server.mjs`) supporting `h264_nvenc`, `libx264`, and `libvpx-vp9` hardware/software encoding;
+- removes synthetic `testsrc` placeholders in favor of real FFmpeg transcoding, Lanczos scaling, target-MB bitrate sizing, and deterministic PPM frame generation;
+- adds 32-byte EBWP binary telemetry verification and monotonic HLC synchronization (`daemon/synkronia/`);
+- wires the browser HUD (`js/daemon-bridge.js`) to auto-detect `:3370` with transparent WebCodecs/MediaRecorder fallback;
+- archives legacy marketing/stub artifacts to SCRIBA and updates CI + portable release packaging to ship the complete v2.0 bundle.
+
 ## 1.0.1
 
 - removes obsolete public links to the former owner namespace;
