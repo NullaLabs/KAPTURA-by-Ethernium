@@ -42,6 +42,18 @@
 
   <!-- TAB 1: RECORDER STUDIO -->
   <div id="tab-recorder" class="tab-content active">
+    <div class="quick-hero-bar">
+      <div class="quick-hero-copy">
+        🎬 ESTUDIO DE CAPTURA Y FLUJO CONTINUO
+        <span>Graba tu pantalla directo a disco (:3370 NVENC, cero límite RAM) o abre un vídeo local para recortar, comprimir y convertir en 1 clic.</span>
+      </div>
+      <div class="quick-hero-actions">
+        <button class="btn btn-primary" id="btnQuickScreen" type="button">🖥️ Grabar Pantalla / Ventana</button>
+        <button class="btn btn-secondary" id="btnQuickOpenFile" type="button">📂 Abrir Vídeo en Stage</button>
+        <input type="file" id="stageFileInput" accept="video/*" style="display:none">
+      </div>
+    </div>
+
     <div class="stage-frame">
       <div class="rec-indicator" id="recIndicator">
         <div class="rec-dot"></div>
@@ -54,12 +66,14 @@
 
     <div class="controls-grid" style="grid-template-columns: repeat(5, 1fr);">
       <div class="control-card">
-        <div class="control-label">CAPTURE MODE / ENGINE</div>
+        <div class="control-label">CAPTURE SOURCE / BENCHMARK</div>
         <select id="modeSelect">
-          <option value="screen">🌐 Screen / Tab Capture (getDisplayMedia)</option>
-          <option value="dna" selected>🧬 3D DNA Helix (Canvas Engine)</option>
-          <option value="binary">💻 Binary Matrix Stream (Canvas Engine)</option>
-          <option value="fibonacci">🌀 Fibonacci Vortex (Canvas Engine)</option>
+          <option value="screen">🌐 Screen / Window Capture (getDisplayMedia)</option>
+          <optgroup label="Signal Generator / Benchmark (Canvas)">
+            <option value="dna" selected>🧬 3D DNA Helix (Test Signal)</option>
+            <option value="binary">💻 Binary Matrix Stream (Test Signal)</option>
+            <option value="fibonacci">🌀 Fibonacci Vortex (Test Signal)</option>
+          </optgroup>
         </select>
       </div>
       <div class="control-card">
@@ -96,6 +110,17 @@
       </div>
     </div>
 
+    <div class="audio-mixer-bar">
+      <div class="audio-channel">
+        <label class="audio-toggle"><input type="checkbox" id="chkSysAudio" checked> 🔊 Audio Sistema / Tab</label>
+        <div class="vu-track"><div class="vu-fill" id="vuSysFill"></div></div>
+      </div>
+      <div class="audio-channel">
+        <label class="audio-toggle"><input type="checkbox" id="chkMicAudio"> 🎙️ Micrófono</label>
+        <div class="vu-track"><div class="vu-fill" id="vuMicFill"></div></div>
+      </div>
+    </div>
+
     <div class="btn-group">
       <button class="btn btn-secondary" id="btnSelectSource">🌐 SELECT SOURCE</button>
       <button class="btn btn-primary" id="btnStartRec">🔴 START RECORDING</button>
@@ -110,6 +135,33 @@
         </div>
       </div>
     </div>
+
+    <div class="stage-trim-dock" id="stageTrimDock">
+      <div class="trim-header">
+        <span id="trimMeta">ACTIVE MASTER: —</span>
+        <span id="trimRangeLabel">IN 0.0s → OUT 0.0s</span>
+      </div>
+      <div class="trim-sliders">
+        <label class="trim-range-field">
+          <span>IN (Inicio recorte)</span>
+          <input type="range" id="trimStartRange" min="0" max="10" step="0.1" value="0">
+        </label>
+        <label class="trim-range-field">
+          <span>OUT (Fin recorte)</span>
+          <input type="range" id="trimEndRange" min="0" max="10" step="0.1" value="10">
+        </label>
+      </div>
+      <div class="trim-actions">
+        <button class="btn btn-primary" type="button" id="btnTrimFast">✂️ TRIM FAST</button>
+        <button class="btn btn-secondary" type="button" id="btnSendToCinema">🎬 → CINEMA GIF</button>
+        <button class="btn btn-secondary" type="button" id="btnSendToCompressor">▣ → COMPRESOR</button>
+        <button class="btn btn-secondary" type="button" id="btnSendToConverter">⚡ → V-CONVERTER</button>
+        <button class="btn btn-secondary" type="button" id="btnSendToUpskaletor">◆ → UPSKALETOR</button>
+        <a class="btn btn-secondary" id="btnDownloadActive" style="text-decoration:none" download="kaptura_master.mp4">💾 DESCARGAR</a>
+        <button class="btn btn-secondary" type="button" id="btnBackToLive">🔄 MODO CAPTURA</button>
+      </div>
+    </div>
+
     <div class="proc-readout" id="recorderReadout"></div>
   </div>
 
@@ -212,8 +264,10 @@
         <button class="btn btn-primary" style="width:100%" id="btnCompressNow">COMPRESS (REAL)</button>
       </div>
     </div>
+    <div class="estimate-pill" id="compressorEstimate"></div>
     <div id="compressorResult" style="margin-top:20px; display:none; text-align:center">
       <div class="proc-readout" id="compressorReadout" style="display:inline-block; text-align:left; max-width:600px; width:100%; margin-bottom:14px"></div>
+      <div id="compressorCompareBox" style="display:none"></div>
       <div style="margin-top:10px">
         <a id="btnDownloadCompressed" class="btn btn-primary" style="text-decoration:none; display:inline-block" download="kaptura_compressed">💾 DOWNLOAD COMPRESSED</a>
       </div>
@@ -369,6 +423,7 @@
         <span class="boundary-note">OPTIONAL PRIVATE COMPANION — AUTHORIZED OPERATORS ONLY</span>
         <button class="btn btn-secondary" type="button" id="btnCopyCmd">COPY CONSOLE COMMAND</button>
       </div>
+      <div id="upskaletorCompareBox" style="display:none"></div>
 
       <div class="boundary-note" id="boundaryNote">
         PRODUCT BOUNDARY // KAPTURA is the visual capture studio and performs real in-browser transcoding (WebM/MP4 re-encode and a native JavaScript GIF encoder).
@@ -398,7 +453,9 @@
 <script src="js/svg-vector.js"></script>
 <script src="js/upskaletor.js"></script>
 <script src="js/vault.js"></script>
+<script src="js/audio-mixer.js"></script>
 <script src="js/capture.js"></script>
+<script src="js/comparator.js"></script>
 <script src="js/daemon-bridge.js"></script>
 <script src="js/app.js"></script>
 </body>

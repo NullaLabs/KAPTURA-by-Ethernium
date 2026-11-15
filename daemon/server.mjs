@@ -10,12 +10,13 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderVideoTask, transcodeMediaTask } from "./pipeline/videoPipeline.mjs";
+import { renderVideoTask, transcodeMediaTask, trimMediaTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
 import { detectVideoBackend } from "./pipeline/gpuDirectOptimizer.mjs";
 import { getCompanionStatus } from "./providers/adapters.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "./synkronia/ebwpProtocol.mjs";
 import { hlcEngine } from "./synkronia/hlcClock.mjs";
 import { createIpcClient } from "./synkronia/ipcClient.mjs";
+import { attachWebSocketServer } from "./synkronia/wsServer.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, "..");
@@ -75,6 +76,31 @@ export function createKapturaDaemon({
   fs.mkdirSync(exportsDir, { recursive: true });
   let activePort = port;
   let ipcHandle = null;
+  const sseClients = new Set();
+
+  const emitProgressEvent = (evt) => {
+    const payload = `event: progress\ndata: ${JSON.stringify(evt)}\n\n`;
+    for (const client of sseClients) {
+      try { client.write(payload); } catch { sseClients.delete(client); }
+    }
+  };
+
+  const sseKeepAlive = setInterval(() => {
+    for (const client of sseClients) {
+      try { client.write(`: ping\n\n`); } catch { sseClients.delete(client); }
+    }
+  }, 20000);
+  sseKeepAlive.unref();
+
+  const resolveExportRef = (ref) => {
+    if (!ref) return null;
+    const cleanPath = String(ref).split("?")[0].replace(/^https?:\/\/[^/]+/i, "").replace(/^\/?exports\//i, "");
+    try {
+      return safeStaticFile(exportsDir, decodeURIComponent(cleanPath));
+    } catch {
+      return null;
+    }
+  };
 
   const buildHealthPayload = () => {
     const backend = detectVideoBackend();
@@ -84,13 +110,19 @@ export function createKapturaDaemon({
       online: true,
       status: "online",
       engine: "KAPTURA SOVEREIGN STUDIO + GPU DAEMON",
-      version: "2.0.0",
+      version: "3.0.0",
       port: activePort,
       capabilities: {
         ffmpegAvailable: backend.available,
         preferredCodec: backend.preferredCodec,
         hardwareAccelerated: backend.hardwareAccelerated,
         encoders: backend.encoders,
+      },
+      streaming: {
+        wsCapture: "/ws/capture",
+        sseEvents: "/events",
+        rangeSupported: true,
+        trimEndpoint: "/trim",
       },
       providers: {
         etherniumVox: providers.etherniumVox,
@@ -103,10 +135,10 @@ export function createKapturaDaemon({
 
   const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality"
+      "Content-Type, Range, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode"
     );
 
     if (req.method === "OPTIONS") {
@@ -144,32 +176,164 @@ export function createKapturaDaemon({
       });
     }
 
-    if (req.method === "GET" && pathname.startsWith("/exports/")) {
+    if (req.method === "GET" && pathname === "/events") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      });
+      res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+      sseClients.add(res);
+      req.on("close", () => sseClients.delete(res));
+      return;
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && pathname.startsWith("/exports/")) {
       const rel = decodeURIComponent(pathname.slice("/exports/".length));
       const exportFile = safeStaticFile(exportsDir, rel);
       if (!exportFile) return sendJson(res, 404, { error: "Export artifact not found" });
       const ext = path.extname(exportFile).toLowerCase();
-      res.writeHead(200, { "Content-Type": MIME_MAP[ext] || "application/octet-stream" });
+      const totalSize = fs.statSync(exportFile).size;
+      const mimeType = MIME_MAP[ext] || "application/octet-stream";
+      const rangeHeader = req.headers.range;
+
+      if (rangeHeader && totalSize > 0) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader).trim());
+        if (!match) {
+          res.writeHead(416, { "Content-Range": `bytes */${totalSize}` });
+          return res.end();
+        }
+        let start = match[1] ? parseInt(match[1], 10) : 0;
+        let end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
+        if (!match[1] && match[2]) {
+          const suffixLen = parseInt(match[2], 10);
+          start = Math.max(0, totalSize - suffixLen);
+          end = totalSize - 1;
+        }
+        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= totalSize) {
+          res.writeHead(416, { "Content-Range": `bytes */${totalSize}` });
+          return res.end();
+        }
+        end = Math.min(end, totalSize - 1);
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": end - start + 1,
+          "Content-Type": mimeType,
+        });
+        if (req.method === "HEAD") return res.end();
+        return fs.createReadStream(exportFile, { start, end }).pipe(res);
+      }
+
+      res.writeHead(200, {
+        "Content-Type": mimeType,
+        "Content-Length": totalSize,
+        "Accept-Ranges": "bytes",
+      });
+      if (req.method === "HEAD") return res.end();
       return fs.createReadStream(exportFile).pipe(res);
+    }
+
+    if (req.method === "POST" && pathname === "/trim") {
+      try {
+        const h = req.headers;
+        const ctype = String(h["content-type"] || "").toLowerCase();
+        let inputPath = "";
+        let inputBuffer = null;
+        let inputExt = String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".mp4");
+        let startSec = Number(h["x-kaptura-start-sec"] || url.searchParams.get("startSec") || 0);
+        let endSec = Number(h["x-kaptura-end-sec"] || url.searchParams.get("endSec") || 0);
+        let reencode = String(h["x-kaptura-reencode"] || url.searchParams.get("reencode") || "") === "true";
+        let taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
+
+        if (ctype.includes("application/json")) {
+          const rawJson = await readRequestBody(req, 1024 * 1024);
+          let body;
+          try {
+            body = JSON.parse(rawJson.toString("utf8") || "{}");
+          } catch {
+            return sendJson(res, 400, { success: false, error: "Invalid JSON payload" });
+          }
+          const resolved = resolveExportRef(body.sourceUrl || body.exportFile);
+          if (!resolved) {
+            return sendJson(res, 400, { success: false, status: "missing_input", error: "Valid sourceUrl or exportFile in /exports/ is required." });
+          }
+          inputPath = resolved;
+          inputExt = path.extname(resolved).toLowerCase() || ".mp4";
+          startSec = Number(body.startSec ?? startSec) || 0;
+          endSec = Number(body.endSec ?? endSec) || 0;
+          reencode = Boolean(body.reencode ?? reencode);
+          taskId = String(body.taskId || taskId || "");
+        } else {
+          const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+          if (sourceExport) {
+            const resolved = resolveExportRef(sourceExport);
+            if (!resolved) return sendJson(res, 404, { success: false, status: "missing_input", error: "Referenced export file not found." });
+            inputPath = resolved;
+            inputExt = path.extname(resolved).toLowerCase() || ".mp4";
+          } else {
+            const raw = await readRequestBody(req);
+            if (!raw.length) {
+              return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+            }
+            inputBuffer = raw;
+          }
+        }
+
+        const result = await trimMediaTask({
+          inputPath,
+          inputBuffer,
+          inputExt,
+          outputDir: exportsDir,
+          startSec,
+          endSec,
+          reencode,
+          taskId,
+          onProgress: emitProgressEvent,
+        });
+        if (!result.success) {
+          return sendJson(res, result.status === "missing_input" || result.status === "empty_input" ? 400 : 422, result);
+        }
+        return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
+      } catch (err) {
+        return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     if (req.method === "POST" && pathname === "/transcode") {
       try {
-        const raw = await readRequestBody(req);
-        if (!raw.length) {
-          return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
-        }
         const h = req.headers;
+        const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        let inputPath = "";
+        let raw = null;
+        if (sourceExport) {
+          const resolved = resolveExportRef(sourceExport);
+          if (!resolved) {
+            return sendJson(res, 404, { success: false, status: "missing_input", error: "Referenced export artifact not found." });
+          }
+          inputPath = resolved;
+        } else {
+          raw = await readRequestBody(req);
+          if (!raw.length) {
+            return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+          }
+        }
         const container = String(h["x-kaptura-container"] || url.searchParams.get("container") || "mp4");
-        const inputExt = String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".webm");
+        const inputExt = inputPath
+          ? (path.extname(inputPath).toLowerCase() || ".mp4")
+          : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".webm");
         const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
         const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);
         const fps = Number(h["x-kaptura-fps"] || url.searchParams.get("fps") || 0);
         const bitrateMbps = Number(h["x-kaptura-bitrate"] || url.searchParams.get("bitrate") || 0);
         const targetMB = Number(h["x-kaptura-target-mb"] || url.searchParams.get("targetMB") || 0);
         const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
+        const startSec = Number(h["x-kaptura-start-sec"] || url.searchParams.get("startSec") || 0);
+        const endSec = Number(h["x-kaptura-end-sec"] || url.searchParams.get("endSec") || 0);
+        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
 
         const result = await transcodeMediaTask({
+          inputPath,
           inputBuffer: raw,
           inputExt,
           outputDir: exportsDir,
@@ -180,6 +344,10 @@ export function createKapturaDaemon({
           bitrateMbps,
           targetMB,
           quality,
+          startSec,
+          endSec,
+          taskId,
+          onProgress: emitProgressEvent,
         });
 
         if (!result.success) {
@@ -231,6 +399,7 @@ export function createKapturaDaemon({
           quality: body.quality || "high",
           upscale: Boolean(body.upscale),
           outputDir: exportsDir,
+          onProgress: emitProgressEvent,
         });
         return sendJson(res, result.success ? 200 : 422, {
           ...result,
@@ -261,6 +430,83 @@ export function createKapturaDaemon({
     return sendJson(res, 404, { error: "Endpoint or static asset not found" });
   });
 
+  const wsHub = attachWebSocketServer(server, (peer) => {
+    if (peer.pathname !== "/ws/capture") {
+      peer.close(1008, "Unsupported WebSocket endpoint");
+      return;
+    }
+
+    let session = null;
+    peer.onText = async (rawText) => {
+      let msg;
+      try {
+        msg = JSON.parse(rawText);
+      } catch {
+        peer.sendJson({ type: "error", error: "Invalid JSON control frame" });
+        return;
+      }
+
+      if (msg.type === "ping") {
+        peer.sendJson({ type: "pong" });
+        return;
+      }
+
+      if (msg.type === "start") {
+        if (session) session.abort();
+        try {
+          session = createLiveCaptureSession({
+            outputDir: exportsDir,
+            mode: msg.mode === "pipe-frames" ? "pipe-frames" : "pipe-media",
+            inputExt: msg.inputExt || ".webm",
+            fps: msg.fps || 30,
+            container: msg.container || "mp4",
+            bitrateMbps: msg.bitrateMbps || 0,
+            quality: msg.quality || "high",
+            onProgress: emitProgressEvent,
+          });
+          peer.sendJson({ type: "started", taskId: session.taskId, mode: session.mode });
+        } catch (err) {
+          peer.sendJson({ type: "error", error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (msg.type === "stop") {
+        if (!session) {
+          peer.sendJson({ type: "error", error: "No active capture session" });
+          return;
+        }
+        const activeSession = session;
+        session = null;
+        try {
+          const result = await activeSession.finalize();
+          peer.sendJson({ type: "completed", ...result });
+        } catch (err) {
+          peer.sendJson({ type: "error", error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    };
+
+    peer.onBinary = (buf) => {
+      if (!session) {
+        peer.sendJson({ type: "error", error: "Send start control frame before binary chunks" });
+        return;
+      }
+      session.writeChunk(buf);
+      const { chunksReceived, bytesReceived } = session.stats;
+      if (chunksReceived === 1 || chunksReceived % 4 === 0) {
+        peer.sendJson({ type: "ack", taskId: session.taskId, chunksReceived, bytesReceived });
+      }
+    };
+
+    peer.onClose = () => {
+      if (session) {
+        session.abort();
+        session = null;
+      }
+    };
+  });
+
   return {
     server,
     start: () =>
@@ -277,6 +523,12 @@ export function createKapturaDaemon({
       }),
     stop: () =>
       new Promise((resolve) => {
+        clearInterval(sseKeepAlive);
+        for (const client of sseClients) {
+          try { client.end(); } catch {}
+        }
+        sseClients.clear();
+        wsHub.closeAll();
         if (ipcHandle) {
           ipcHandle.close();
           ipcHandle = null;

@@ -35,7 +35,12 @@
       let tx;
       try { tx = d.transaction([STORE], 'readwrite'); }
       catch (e) { return reject(e); }
-      const req = tx.objectStore(STORE).add(record);
+      const item = {
+        ...record,
+        blob: record && record.remoteUrl ? null : (record ? record.blob : null),
+        sizeBytes: Number(record && (record.sizeBytes || (record.blob && record.blob.size))) || 0,
+      };
+      const req = tx.objectStore(STORE).add(item);
       req.onsuccess = () => resolve(req.result);
       tx.onabort = () => {
         const err = tx.error || {};
@@ -80,7 +85,17 @@
     return Promise.resolve(null);
   }
 
-  const api = { open, add, getAll, remove, clear, estimate };
+  function getRecordMediaSrc(item) {
+    if (!item) return { src: '', revoke: () => {} };
+    if (item.remoteUrl) return { src: item.remoteUrl, revoke: () => {} };
+    if (item.blob instanceof Blob) {
+      const url = URL.createObjectURL(item.blob);
+      return { src: url, revoke: () => URL.revokeObjectURL(url) };
+    }
+    return { src: '', revoke: () => {} };
+  }
+
+  const api = { open, add, getAll, remove, clear, estimate, getRecordMediaSrc };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaVault = api;
 })(typeof self !== 'undefined' ? self : this);

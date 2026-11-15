@@ -142,7 +142,7 @@
       }
     }
     if (!result) {
-      result = await Transcoder.transcode(file, {
+      result = await Transcoder.transcode(file.remoteUrl || file, {
         width: targetW,
         height: targetH,
         container: 'mp4',

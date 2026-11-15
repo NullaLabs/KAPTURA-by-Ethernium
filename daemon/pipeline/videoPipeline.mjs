@@ -43,10 +43,49 @@ function pruneOldExports(outputDir, maxAgeMs = 15 * 60 * 1000, maxFiles = 20) {
   } catch {}
 }
 
-function runFfmpegArgs(ffmpegPath, args, onStderrLine) {
+function runFfmpegArgs(ffmpegPath, args, options = {}) {
+  const opts = typeof options === "function" ? { onStderrLine: options } : (options || {});
+  const { onStderrLine, onProgressMeta, totalDurationSec = 0 } = opts;
+
   return new Promise((resolve) => {
     const proc = spawn(ffmpegPath, args, { windowsHide: true });
     let stderr = "";
+    let stdoutBuf = "";
+    let progressState = {};
+
+    if (typeof onProgressMeta === "function") {
+      proc.stdout.on("data", (chunk) => {
+        stdoutBuf += chunk.toString();
+        let nlIdx;
+        while ((nlIdx = stdoutBuf.indexOf("\n")) !== -1) {
+          const line = stdoutBuf.slice(0, nlIdx).trim();
+          stdoutBuf = stdoutBuf.slice(nlIdx + 1);
+          const eqIdx = line.indexOf("=");
+          if (eqIdx === -1) continue;
+          const k = line.slice(0, eqIdx).trim();
+          const v = line.slice(eqIdx + 1).trim();
+          progressState[k] = v;
+          if (k === "progress") {
+            const outUs = Number(progressState.out_time_us || 0);
+            const outTimeSec = Number.isFinite(outUs) && outUs > 0 ? outUs / 1e6 : 0;
+            const frame = Number(progressState.frame || 0) || 0;
+            const speed = progressState.speed || "";
+            const computedPct = totalDurationSec > 0
+              ? Math.max(1, Math.min(99, Math.round((outTimeSec / totalDurationSec) * 100)))
+              : Math.min(95, Math.max(10, Math.round(frame / 4)));
+            onProgressMeta({
+              frame,
+              outTimeSec,
+              speed,
+              progress: v === "end" ? 100 : computedPct,
+              done: v === "end",
+            });
+            progressState = {};
+          }
+        }
+      });
+    }
+
     proc.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       stderr += text;
@@ -75,16 +114,54 @@ function escapeDrawtext(text) {
 }
 
 /** Encode with NVENC/AMF and fallback once cleanly to libx264 only on hardware init error. */
-async function encodeWithSafeFallback({ ffmpegPath, preArgs, container, bitrateMbps, quality, outputPath }) {
+async function encodeWithSafeFallback({
+  ffmpegPath,
+  preArgs,
+  container,
+  bitrateMbps,
+  quality,
+  outputPath,
+  totalDurationSec = 0,
+  onProgress,
+  taskId = "",
+}) {
   const primary = getOptimalGpuEncoderParams({ container, bitrateMbps, quality });
-  const primaryArgs = [...preArgs, ...primary.gpuFlags, "-movflags", "+faststart", outputPath];
-  const res = await runFfmpegArgs(ffmpegPath, primaryArgs);
+  const progressFlags = typeof onProgress === "function" ? ["-progress", "pipe:1", "-nostats"] : [];
+  const emitMeta = typeof onProgress === "function"
+    ? (meta) => onProgress({
+        taskId,
+        stage: "ENCODING",
+        progress: meta.progress,
+        frame: meta.frame,
+        outTimeSec: meta.outTimeSec,
+        speed: meta.speed,
+        codec: primary.codec,
+      })
+    : undefined;
+
+  const primaryArgs = [...progressFlags, ...preArgs, ...primary.gpuFlags, "-movflags", "+faststart", outputPath];
+  const res = await runFfmpegArgs(ffmpegPath, primaryArgs, {
+    onProgressMeta: emitMeta,
+    totalDurationSec,
+  });
   if (res.code === 0 && fs.existsSync(outputPath)) {
     return { ok: true, codec: primary.codec, hardwareAccelerated: primary.hardwareAccelerated, fallbackCpu: false };
   }
 
   if (primary.hardwareAccelerated && primary.backend.encoders.libx264) {
+    const emitCpuMeta = typeof onProgress === "function"
+      ? (meta) => onProgress({
+          taskId,
+          stage: "ENCODING_CPU",
+          progress: meta.progress,
+          frame: meta.frame,
+          outTimeSec: meta.outTimeSec,
+          speed: meta.speed,
+          codec: "libx264",
+        })
+      : undefined;
     const cpuArgs = [
+      ...progressFlags,
       ...preArgs,
       "-c:v", "libx264",
       "-preset", quality === "fast" ? "veryfast" : "medium",
@@ -93,7 +170,10 @@ async function encodeWithSafeFallback({ ffmpegPath, preArgs, container, bitrateM
       "-movflags", "+faststart",
       outputPath,
     ];
-    const cpuRes = await runFfmpegArgs(ffmpegPath, cpuArgs);
+    const cpuRes = await runFfmpegArgs(ffmpegPath, cpuArgs, {
+      onProgressMeta: emitCpuMeta,
+      totalDurationSec,
+    });
     if (cpuRes.code === 0 && fs.existsSync(outputPath)) {
       return { ok: true, codec: "libx264", hardwareAccelerated: false, fallbackCpu: true };
     }
@@ -133,10 +213,10 @@ function writeProceduralWaveFrames(framesDir, { width, height, fps, durationSec 
  * Transcode an actual input file or buffer cleanly into exports/ with Lanczos scaling & budget control.
  */
 export async function transcodeMediaTask({
-  inputPath,
-  inputBuffer,
+  inputPath = "",
+  inputBuffer = null,
   inputExt = ".webm",
-  outputDir,
+  outputDir = path.resolve(process.cwd(), "exports"),
   container = "mp4",
   width = 0,
   height = 0,
@@ -145,6 +225,9 @@ export async function transcodeMediaTask({
   targetMB = 0,
   quality = "high",
   textOverlay = "",
+  startSec = 0,
+  endSec = 0,
+  taskId: providedTaskId = "",
   onProgress,
 }) {
   if (!inputPath) {
@@ -162,7 +245,7 @@ export async function transcodeMediaTask({
 
   fs.mkdirSync(outputDir, { recursive: true });
   pruneOldExports(outputDir);
-  const taskId = `transcode_${Date.now()}`;
+  const taskId = providedTaskId || `transcode_${Date.now()}`;
   const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".webm";
   let stagedInput = inputPath ? path.resolve(inputPath) : "";
   let createdTemp = false;
@@ -184,14 +267,19 @@ export async function transcodeMediaTask({
       return { success: false, status: "empty_input", error: "Input media file is empty (0 bytes)." };
     }
 
-    if (typeof onProgress === "function") onProgress({ taskId, stage: "PROBING", progress: 15 });
+    if (typeof onProgress === "function") onProgress({ taskId, stage: "PROBING", progress: 5 });
+
+    const trimStart = Math.max(0, Number(startSec) || 0);
+    const trimEnd = Number(endSec) > trimStart ? Number(endSec) : 0;
+    const probedDur = await probeDurationSec(backend.ffmpegPath, stagedInput);
+    const effectiveDur = trimEnd > 0
+      ? Math.max(0.2, trimEnd - trimStart)
+      : Math.max(0.2, probedDur > 0 ? Math.max(0.2, probedDur - trimStart) : 5);
 
     let computedBitrateMbps = Number(bitrateMbps) || 0;
     if (!computedBitrateMbps && targetMB > 0) {
-      const dur = await probeDurationSec(backend.ffmpegPath, stagedInput);
-      const effectiveDur = dur > 0.2 ? dur : 5;
       const budgetMbps = ((targetMB * 8 * 1024 * 1024 * 0.88) / effectiveDur) / 1e6;
-      const sourceBitrateMbps = ((inputStat.size * 8) / effectiveDur) / 1e6;
+      const sourceBitrateMbps = ((inputStat.size * 8) / (probedDur > 0.2 ? probedDur : effectiveDur)) / 1e6;
       const cappedMbps = inputStat.size <= targetMB * 1024 * 1024
         ? Math.min(budgetMbps, sourceBitrateMbps * 0.85)
         : budgetMbps;
@@ -214,12 +302,15 @@ export async function transcodeMediaTask({
       filters.push(`drawtext=${fontArg}text='${escapeDrawtext(textOverlay)}':x=24:y=24:fontsize=20:fontcolor=0x00F0FF`);
     }
 
-    const preArgs = ["-hide_banner", "-y", "-i", stagedInput];
+    const preArgs = ["-hide_banner", "-y"];
+    if (trimStart > 0) preArgs.push("-ss", trimStart.toFixed(3));
+    preArgs.push("-i", stagedInput);
+    if (trimEnd > 0) preArgs.push("-t", (trimEnd - trimStart).toFixed(3));
     if (fps > 0) preArgs.push("-r", String(Math.round(fps)));
     if (filters.length > 0) preArgs.push("-vf", filters.join(","));
     if (outExt === "mp4") preArgs.push("-c:a", "aac", "-b:a", "128k");
 
-    if (typeof onProgress === "function") onProgress({ taskId, stage: "ENCODING", progress: 60 });
+    if (typeof onProgress === "function") onProgress({ taskId, stage: "ENCODING", progress: 12 });
     const encRes = await encodeWithSafeFallback({
       ffmpegPath: backend.ffmpegPath,
       preArgs,
@@ -227,6 +318,9 @@ export async function transcodeMediaTask({
       bitrateMbps: computedBitrateMbps,
       quality,
       outputPath,
+      totalDurationSec: probedDur > 0 ? effectiveDur : 0,
+      onProgress,
+      taskId,
     });
 
     if (!encRes.ok) {
@@ -234,6 +328,7 @@ export async function transcodeMediaTask({
     }
 
     const stat = fs.statSync(outputPath);
+    const outDuration = await probeDurationSec(backend.ffmpegPath, outputPath);
     if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
     return {
       success: true,
@@ -242,6 +337,7 @@ export async function transcodeMediaTask({
       outputFile,
       videoPath: outputPath,
       sizeBytes: stat.size,
+      duration: outDuration || effectiveDur,
       codec: encRes.codec,
       hardwareAccelerated: encRes.hardwareAccelerated,
       fallbackCpu: encRes.fallbackCpu,
@@ -252,6 +348,255 @@ export async function transcodeMediaTask({
       try { fs.unlinkSync(stagedInput); } catch {}
     }
   }
+}
+
+/**
+ * Fast lossless stream-copy trim (-ss/-to -c copy) with automatic NVENC/x264 fallback when re-encoding is needed.
+ */
+export async function trimMediaTask({
+  inputPath = "",
+  inputBuffer = null,
+  inputExt = ".mp4",
+  outputDir = path.resolve(process.cwd(), "exports"),
+  startSec = 0,
+  endSec = 0,
+  reencode = false,
+  taskId: providedTaskId = "",
+  onProgress,
+}) {
+  if (!inputPath && (!inputBuffer || inputBuffer.length === 0)) {
+    return { success: false, status: "missing_input", error: "Input media path or buffer is required." };
+  }
+  const backend = detectVideoBackend();
+  if (!backend.available || !backend.ffmpegPath) {
+    return { success: false, status: "ffmpeg_unavailable", error: "FFmpeg binary not detected on host." };
+  }
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  pruneOldExports(outputDir);
+  const taskId = providedTaskId || `trim_${Date.now()}`;
+  const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".mp4";
+  let stagedInput = inputPath ? path.resolve(inputPath) : "";
+  let createdTemp = false;
+
+  try {
+    if (!stagedInput && inputBuffer) {
+      stagedInput = path.join(outputDir, `${taskId}_in${cleanExt}`);
+      fs.writeFileSync(stagedInput, inputBuffer);
+      createdTemp = true;
+    }
+    if (!stagedInput || !fs.existsSync(stagedInput)) {
+      return { success: false, status: "missing_input", error: "Input media path does not exist." };
+    }
+    const trimStart = Math.max(0, Number(startSec) || 0);
+    const trimEnd = Number(endSec) > trimStart ? Number(endSec) : 0;
+
+    if (!reencode && (cleanExt === ".mp4" || cleanExt === ".mov" || cleanExt === ".webm")) {
+      const outExt = cleanExt === ".webm" ? "webm" : "mp4";
+      const outputFile = `${taskId}.${outExt}`;
+      const outputPath = path.join(outputDir, outputFile);
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "TRIM_COPY", progress: 40 });
+      const copyArgs = ["-hide_banner", "-y"];
+      if (trimStart > 0) copyArgs.push("-ss", trimStart.toFixed(3));
+      copyArgs.push("-i", stagedInput);
+      if (trimEnd > 0) copyArgs.push("-t", (trimEnd - trimStart).toFixed(3));
+      copyArgs.push("-c", "copy", "-avoid_negative_ts", "make_zero");
+      if (outExt === "mp4") copyArgs.push("-movflags", "+faststart");
+      copyArgs.push(outputPath);
+
+      const copyRes = await runFfmpegArgs(backend.ffmpegPath, copyArgs);
+      if (copyRes.code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+        const outDur = await probeDurationSec(backend.ffmpegPath, outputPath);
+        if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
+        return {
+          success: true,
+          status: "completed",
+          taskId,
+          outputFile,
+          videoPath: outputPath,
+          sizeBytes: fs.statSync(outputPath).size,
+          duration: outDur,
+          codec: "copy",
+          losslessCopy: true,
+          hardwareAccelerated: false,
+        };
+      }
+      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+    }
+
+    return transcodeMediaTask({
+      inputPath: stagedInput,
+      inputExt: cleanExt,
+      outputDir,
+      container: cleanExt === ".webm" ? "webm" : "mp4",
+      startSec: trimStart,
+      endSec: trimEnd,
+      quality: "high",
+      taskId,
+      onProgress,
+    });
+  } finally {
+    if (createdTemp && stagedInput && fs.existsSync(stagedInput)) {
+      try { fs.unlinkSync(stagedInput); } catch {}
+    }
+  }
+}
+
+/**
+ * Disk-backed live streaming capture session for WebSocket /ws/capture.
+ * - "pipe-media": writes MediaRecorder binary slices straight to disk (.part) and finalizes to NVENC MP4.
+ * - "pipe-frames": pipes live MJPEG canvas frames directly into FFmpeg image2pipe -> NVENC MP4.
+ */
+export function createLiveCaptureSession({
+  outputDir = path.resolve(process.cwd(), "exports"),
+  mode = "pipe-media",
+  inputExt = ".webm",
+  fps = 30,
+  container = "mp4",
+  bitrateMbps = 0,
+  quality = "high",
+  onProgress,
+} = {}) {
+  const backend = detectVideoBackend();
+  const taskId = `capture_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const workDir = path.join(outputDir, `.work_${taskId}`);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.mkdirSync(workDir, { recursive: true });
+  pruneOldExports(outputDir);
+
+  const safeExt = ALLOWED_INPUT_EXTS.has(String(inputExt).toLowerCase()) ? String(inputExt).toLowerCase() : ".webm";
+  const outExt = container === "webm" ? "webm" : "mp4";
+  const outputFile = `${taskId}.${outExt}`;
+  const outputPath = path.join(outputDir, outputFile);
+  let bytesReceived = 0;
+  let chunksReceived = 0;
+  let closed = false;
+
+  if (mode === "pipe-frames") {
+    if (!backend.available || !backend.ffmpegPath) {
+      throw new Error("FFmpeg binary not detected on host.");
+    }
+    const safeFps = Math.max(5, Math.min(60, Number(fps) || 30));
+    const gpu = getOptimalGpuEncoderParams({ container: outExt, bitrateMbps, quality });
+    const ffArgs = [
+      "-hide_banner", "-y",
+      "-f", "image2pipe",
+      "-vcodec", "mjpeg",
+      "-framerate", String(safeFps),
+      "-i", "pipe:0",
+      "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      ...gpu.gpuFlags,
+      "-movflags", "+faststart",
+      outputPath,
+    ];
+    const proc = spawn(backend.ffmpegPath, ffArgs, { windowsHide: true });
+    let stderr = "";
+    proc.stderr.on("data", (d) => {
+      stderr += d.toString();
+      if (stderr.length > 8192) stderr = stderr.slice(-8192);
+    });
+    const exitPromise = new Promise((resolve) => {
+      proc.on("error", (err) => resolve({ code: -1, stderr: String(err) }));
+      proc.on("close", (code) => resolve({ code: code ?? 1, stderr }));
+    });
+
+    return {
+      taskId,
+      mode,
+      get stats() { return { bytesReceived, chunksReceived }; },
+      writeChunk(buf) {
+        if (closed || !buf || !buf.length || !proc.stdin.writable) return false;
+        bytesReceived += buf.length;
+        chunksReceived += 1;
+        proc.stdin.write(buf);
+        return true;
+      },
+      async finalize() {
+        if (closed) return { success: false, error: "Session already closed" };
+        closed = true;
+        try { proc.stdin.end(); } catch {}
+        const res = await exitPromise;
+        try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+        if (chunksReceived === 0 || bytesReceived === 0) {
+          return { success: false, status: "empty_input", error: "No frames streamed to capture socket." };
+        }
+        if (res.code !== 0 || !fs.existsSync(outputPath)) {
+          return { success: false, status: "encode_failed", error: res.stderr.slice(-500) };
+        }
+        const duration = await probeDurationSec(backend.ffmpegPath, outputPath);
+        if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
+        return {
+          success: true,
+          status: "completed",
+          taskId,
+          mode,
+          outputFile,
+          videoPath: outputPath,
+          downloadUrl: `/exports/${outputFile}`,
+          sizeBytes: fs.statSync(outputPath).size,
+          duration,
+          framesCount: chunksReceived,
+          codec: gpu.codec,
+          hardwareAccelerated: gpu.hardwareAccelerated,
+        };
+      },
+      abort() {
+        if (closed) return;
+        closed = true;
+        try { proc.kill("SIGKILL"); } catch {}
+        try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+      },
+    };
+  }
+
+  const partPath = path.join(workDir, `stream${safeExt}`);
+  const writeStream = fs.createWriteStream(partPath);
+  return {
+    taskId,
+    mode: "pipe-media",
+    get stats() { return { bytesReceived, chunksReceived }; },
+    writeChunk(buf) {
+      if (closed || !buf || !buf.length) return false;
+      bytesReceived += buf.length;
+      chunksReceived += 1;
+      writeStream.write(buf);
+      return true;
+    },
+    async finalize() {
+      if (closed) return { success: false, error: "Session already closed" };
+      closed = true;
+      await new Promise((resolve) => writeStream.end(resolve));
+      try {
+        if (bytesReceived === 0 || !fs.existsSync(partPath) || fs.statSync(partPath).size === 0) {
+          return { success: false, status: "empty_input", error: "Live capture stream received 0 bytes." };
+        }
+        const res = await transcodeMediaTask({
+          inputPath: partPath,
+          inputExt: safeExt,
+          outputDir,
+          container: outExt,
+          fps: Number(fps) || 0,
+          bitrateMbps,
+          quality,
+          taskId,
+          onProgress,
+        });
+        return {
+          ...res,
+          mode: "pipe-media",
+          downloadUrl: res.outputFile ? `/exports/${res.outputFile}` : null,
+        };
+      } finally {
+        try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+    abort() {
+      if (closed) return;
+      closed = true;
+      try { writeStream.destroy(); } catch {}
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+    },
+  };
 }
 
 /**
@@ -335,7 +680,7 @@ export async function renderVideoTask({
       preArgs.push("-vf", `drawtext=${fontArg}text='${escapeDrawtext(prompt)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=24:fontcolor=0x00F0FF`);
     }
 
-    if (typeof onProgress === "function") onProgress({ taskId, stage: "ENCODING_NVENC", progress: 70 });
+    if (typeof onProgress === "function") onProgress({ taskId, stage: "ENCODING_NVENC", progress: 40 });
     const encRes = await encodeWithSafeFallback({
       ffmpegPath: backend.ffmpegPath,
       preArgs,
@@ -343,6 +688,9 @@ export async function renderVideoTask({
       bitrateMbps,
       quality,
       outputPath,
+      totalDurationSec: safeDur,
+      onProgress,
+      taskId,
     });
 
     if (!encRes.ok) {

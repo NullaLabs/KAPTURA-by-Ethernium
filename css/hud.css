@@ -366,3 +366,90 @@
     .brand-title { font-size: 18px; }
     .stage-frame { height: 300px; }
   }
+
+  /* ===== V3.0 WORKFLOW: QUICK HERO, DUAL AUDIO VU, STAGE TRIM DOCK, A/B COMPARATOR ===== */
+  .quick-hero-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+    padding: 12px 16px; margin-bottom: 14px; border-radius: 14px;
+    background: linear-gradient(90deg, rgba(0,240,255,0.08), rgba(0,255,157,0.05));
+    border: 1px solid rgba(0,240,255,0.28);
+  }
+  .quick-hero-copy {
+    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--white);
+  }
+  .quick-hero-copy span { color: var(--muted); display: block; font-size: 11px; margin-top: 3px; }
+  .quick-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .audio-mixer-bar {
+    display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+    margin-top: 12px; padding: 10px 14px; border-radius: 12px;
+    background: rgba(10,14,26,0.75); border: 1px solid var(--border);
+    font-family: 'Fira Code', monospace; font-size: 11px;
+  }
+  .audio-channel { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; }
+  .audio-toggle {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    color: var(--white); white-space: nowrap;
+  }
+  .vu-track {
+    flex: 1; height: 8px; border-radius: 999px; overflow: hidden;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  }
+  .vu-fill {
+    width: 0%; height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--emerald), var(--cyan), var(--gold));
+    transition: width 80ms linear;
+  }
+
+  .stage-trim-dock {
+    display: none; flex-direction: column; gap: 12px; margin-top: 14px;
+    padding: 14px 16px; border-radius: 14px;
+    background: rgba(10,14,26,0.88); border: 1px solid rgba(0,255,157,0.3);
+  }
+  .stage-trim-dock.open { display: flex; }
+  .trim-header {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--emerald);
+  }
+  .trim-sliders {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: center;
+  }
+  .trim-range-field {
+    display: flex; flex-direction: column; gap: 4px;
+    font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted);
+  }
+  .trim-range-field input[type="range"] { width: 100%; accent-color: var(--cyan); }
+  .trim-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  .estimate-pill {
+    margin-top: 10px; padding: 8px 12px; border-radius: 10px;
+    background: rgba(0,240,255,0.06); border: 1px dashed rgba(0,240,255,0.35);
+    font-family: 'Fira Code', monospace; font-size: 11px; color: var(--cyan);
+    display: none; text-align: center;
+  }
+
+  .compare-wrap {
+    position: relative; width: 100%; max-width: 780px; margin: 16px auto 0;
+    border-radius: 14px; overflow: hidden; border: 1px solid var(--border);
+    background: #050811; aspect-ratio: 16 / 9; user-select: none;
+  }
+  .compare-media {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block;
+  }
+  .compare-after {
+    position: absolute; inset: 0; width: 100%; height: 100%; clip-path: inset(0 0 0 50%);
+  }
+  .compare-divider {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: var(--cyan);
+    box-shadow: 0 0 12px var(--cyan); pointer-events: none; z-index: 4;
+  }
+  .compare-slider {
+    position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 5; margin: 0;
+  }
+  .compare-tag {
+    position: absolute; top: 10px; padding: 4px 9px; border-radius: 6px; z-index: 4;
+    font-family: 'Fira Code', monospace; font-size: 10px; font-weight: 700;
+    background: rgba(5,8,17,0.82); border: 1px solid rgba(255,255,255,0.18); color: var(--white);
+  }
+  .compare-tag.left { left: 10px; }
+  .compare-tag.right { right: 10px; color: var(--emerald); border-color: rgba(0,255,157,0.4); }

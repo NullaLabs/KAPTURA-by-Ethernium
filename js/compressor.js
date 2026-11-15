@@ -198,7 +198,30 @@
     };
   }
 
-  const api = { compressImage, compressVideo };
+  function estimateBudget({ originalBytes = 0, durationSec = 5, width = 1920, height = 1080, targetMB = 15 } = {}) {
+    const dur = Math.max(0.5, Number(durationSec) || 5);
+    const tgtBytes = Math.max(0.5, Number(targetMB) || 15) * 1024 * 1024;
+    const budgetBps = (tgtBytes * 0.90 * 8) / dur;
+    const budgetMbps = Math.max(0.25, Math.min(45, budgetBps / 1e6));
+    let outW = even(width || 1920), outH = even(height || 1080);
+    if (budgetMbps < 2.5 && outW > 1280) {
+      outH = even(Math.round((1280 * outH) / outW));
+      outW = 1280;
+    } else if (budgetMbps < 6.0 && outW > 1920) {
+      outH = even(Math.round((1920 * outH) / outW));
+      outW = 1920;
+    }
+    const cappedBytes = originalBytes > 0 ? Math.min(tgtBytes, originalBytes * 0.92) : tgtBytes;
+    const estPct = originalBytes > 0 ? Math.max(0, ((originalBytes - cappedBytes) / originalBytes) * 100) : 0;
+    return {
+      estimatedMB: Number((cappedBytes / (1024 * 1024)).toFixed(2)),
+      bitrateMbps: Number(budgetMbps.toFixed(2)),
+      targetResolution: `${outW}x${outH}`,
+      savingsPct: estPct.toFixed(1),
+    };
+  }
+
+  const api = { compressImage, compressVideo, estimateBudget };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaCompressor = api;
 })(typeof self !== 'undefined' ? self : this);

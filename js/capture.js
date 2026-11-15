@@ -26,6 +26,11 @@
     let recStart = 0;
     let recTimer = null;
     let frameCount = 0;
+    let audioMixer = root.KapturaAudioMixer ? root.KapturaAudioMixer.createMixer() : null;
+    let activeWsSession = null;
+    let framePipeTimer = null;
+    let watchdogTimer = null;
+    let previewObjectUrl = null;
 
     // --- real FPS meter (frames counted over a sliding 1s window) ---
     let fpsWindow = [];
@@ -113,21 +118,49 @@
 
       frameCount++;
       emit('onFps', measuredFps);
-      if (sceneMode !== 'screen') requestAnimationFrame(drawScene);
+      if (sceneMode !== 'screen' && sceneMode !== 'playback') requestAnimationFrame(drawScene);
     }
 
     function setMode(mode) {
-      const wasScene = sceneMode !== 'screen';
+      const wasScene = sceneMode !== 'screen' && sceneMode !== 'playback';
       sceneMode = mode;
       if (mode === 'screen') {
+        if (previewObjectUrl) { URL.revokeObjectURL(previewObjectUrl); previewObjectUrl = null; }
+        video.controls = false;
+        video.muted = true;
+        video.removeAttribute('src');
+        video.srcObject = mediaStream;
+        video.play().catch(() => {});
         canvas.style.display = 'none'; video.style.display = 'block';
         emit('onSourceMode', 'EXTERNAL SCREEN / TAB CAPTURE');
+      } else if (mode === 'playback') {
+        canvas.style.display = 'none'; video.style.display = 'block';
+        emit('onSourceMode', 'STAGE PLAYBACK / TRIM');
       } else {
+        if (previewObjectUrl) { URL.revokeObjectURL(previewObjectUrl); previewObjectUrl = null; }
+        video.pause();
+        video.srcObject = null;
+        video.removeAttribute('src');
         canvas.style.display = 'block'; video.style.display = 'none';
-        emit('onSourceMode', 'CANVAS ENGINE: ' + mode.toUpperCase());
+        emit('onSourceMode', 'TEST SIGNAL: ' + mode.toUpperCase());
         if (wasScene) return; // loop already running for scene modes
         requestAnimationFrame(drawScene);
       }
+    }
+
+    function showPlayback(source) {
+      if (previewObjectUrl) { URL.revokeObjectURL(previewObjectUrl); previewObjectUrl = null; }
+      video.srcObject = null;
+      if (typeof source === 'string') {
+        video.src = source;
+      } else if (source instanceof Blob) {
+        previewObjectUrl = URL.createObjectURL(source);
+        video.src = previewObjectUrl;
+      }
+      video.muted = false;
+      video.controls = true;
+      setMode('playback');
+      video.play().catch(() => {});
     }
 
     async function selectSource(fps) {
@@ -136,7 +169,6 @@
           video: { width: { ideal: 3840, max: 3840 }, height: { ideal: 2160, max: 2160 }, frameRate: { ideal: fps, max: fps } },
           audio: { echoCancellation: false, noiseSuppression: false },
         });
-        video.srcObject = mediaStream;
         setMode('screen');
         mediaStream.getVideoTracks()[0].onended = () => { mediaStream = null; setMode('dna'); };
         emit('onSourceReady', true);
@@ -153,69 +185,242 @@
       return Math.max(1, Math.min(Number(requestedMbps) || 16, capMbps)) * 1e6;
     }
 
-    function startRecording(opts) {
+    function clearRecordingTimers() {
+      if (recTimer) { clearInterval(recTimer); recTimer = null; }
+      if (framePipeTimer) { clearInterval(framePipeTimer); framePipeTimer = null; }
+      if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+    }
+
+    async function startRecording(opts) {
       opts = opts || {};
       const caps = opts.caps || Caps.detect();
       const fps = opts.fps || 60;
       const requestedMbps = opts.bitrateMbps || 50;
+      const targetContainer = opts.container || 'mp4';
       const bitrate = sceneMode === 'screen' ? requestedMbps * 1e6 : safeCanvasBitrateBps(requestedMbps, canvas.width);
-      const pick = Caps.pickMimeType(caps, opts.container || 'mp4');
+      const pick = Caps.pickMimeType(caps, targetContainer);
 
-      const streamToRecord = (sceneMode === 'screen' && mediaStream)
+      const baseVideoStream = (sceneMode === 'screen' && mediaStream)
         ? mediaStream
         : canvas.captureStream(fps);
+      const composedStream = new MediaStream(baseVideoStream.getVideoTracks());
+
+      if (audioMixer) {
+        try {
+          await audioMixer.attach({
+            displayStream: sceneMode === 'screen' ? mediaStream : null,
+            micEnabled: Boolean(opts.micEnabled),
+            systemMuted: Boolean(opts.systemMuted),
+          });
+          audioMixer.getOutputTracks().forEach((t) => composedStream.addTrack(t));
+        } catch {}
+      } else if (sceneMode === 'screen' && mediaStream && !opts.systemMuted) {
+        mediaStream.getAudioTracks().forEach((t) => composedStream.addTrack(t));
+      }
+
+      const Daemon = root.KapturaDaemon;
+      const canStreamDaemon = Boolean(
+        opts.streamToDaemon !== false && Daemon && Daemon.isReadyForTranscode() && typeof Daemon.openCaptureSocket === 'function'
+      );
+
+      let wsSession = null;
+      let streamedBytes = 0;
+      let usingFramePipe = false;
+
+      if (canStreamDaemon) {
+        try {
+          wsSession = await Daemon.openCaptureSocket({
+            mode: 'pipe-media',
+            inputExt: pick.real === 'mp4' ? '.mp4' : '.webm',
+            fps,
+            container: targetContainer === 'webm' ? 'webm' : 'mp4',
+            bitrateMbps: Math.round(bitrate / 1e6),
+            quality: 'high',
+            onAck: (ack) => {
+              emit('onSize', `${(ack.bytesReceived / (1024 * 1024)).toFixed(1)} [DISK]`);
+            },
+            onProgress: (frac, meta) => emit('onProgress', { value: frac, meta }),
+          });
+          activeWsSession = wsSession;
+        } catch {
+          wsSession = null;
+          activeWsSession = null;
+        }
+      }
+
+      const startUiTelemetryTimer = () => {
+        if (recTimer) clearInterval(recTimer);
+        const startFrame = frameCount;
+        recTimer = setInterval(() => {
+          const s = Math.floor((Date.now() - recStart) / 1000);
+          emit('onTimer', {
+            text: `REC ${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`,
+            frames: frameCount - startFrame,
+          });
+          if (audioMixer) emit('onAudioLevels', audioMixer.getLevels());
+        }, 100);
+      };
+
+      const startFramePipeFallback = async () => {
+        if (!canStreamDaemon || usingFramePipe) return false;
+        usingFramePipe = true;
+        clearRecordingTimers();
+        if (recorder && recorder.state !== 'inactive') {
+          try { recorder.onstop = null; recorder.ondataavailable = null; recorder.stop(); } catch {}
+        }
+        if (wsSession) { try { wsSession.abort(); } catch {} wsSession = null; }
+
+        try {
+          wsSession = await Daemon.openCaptureSocket({
+            mode: 'pipe-frames',
+            fps: Math.min(30, fps),
+            container: targetContainer === 'webm' ? 'webm' : 'mp4',
+            bitrateMbps: Math.round(bitrate / 1e6),
+            quality: 'high',
+            onAck: (ack) => {
+              emit('onSize', `${(ack.bytesReceived / (1024 * 1024)).toFixed(1)} [NVENC]`);
+            },
+            onProgress: (frac, meta) => emit('onProgress', { value: frac, meta }),
+          });
+          activeWsSession = wsSession;
+        } catch (err) {
+          emit('onError', 'Fallback frame pipe :3370 falló: ' + (err && err.message || err));
+          return false;
+        }
+
+        const safePipeFps = Math.min(30, fps);
+        let busyFrame = false;
+        framePipeTimer = setInterval(() => {
+          if (busyFrame || !activeWsSession) return;
+          busyFrame = true;
+          canvas.toBlob((blob) => {
+            busyFrame = false;
+            if (blob && activeWsSession) {
+              streamedBytes += blob.size;
+              activeWsSession.sendChunk(blob);
+            }
+          }, 'image/jpeg', 0.88);
+        }, Math.max(28, Math.round(1000 / safePipeFps)));
+
+        startUiTelemetryTimer();
+        emit('onNotice', 'Conmutado automáticamente a Pipe Directo MJPEG -> NVENC (:3370).');
+        return true;
+      };
 
       try {
-        recorder = new MediaRecorder(streamToRecord, { mimeType: pick.mime, videoBitsPerSecond: bitrate });
+        recorder = new MediaRecorder(composedStream, { mimeType: pick.mime, videoBitsPerSecond: bitrate });
       } catch (e) {
+        if (wsSession) { wsSession.abort(); activeWsSession = null; }
+        if (audioMixer) audioMixer.destroy();
         emit('onError', 'El navegador no soporta la grabación en el formato pedido: ' + pick.mime);
         return false;
       }
 
       chunks = [];
+      let mediaBytesSeen = 0;
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size) {
-          chunks.push(e.data);
-          const total = chunks.reduce((a, c) => a + c.size, 0);
-          emit('onSize', (total / (1024 * 1024)).toFixed(1));
+          mediaBytesSeen += e.data.size;
+          if (activeWsSession && !usingFramePipe) {
+            streamedBytes += e.data.size;
+            activeWsSession.sendChunk(e.data);
+            emit('onSize', `${(streamedBytes / (1024 * 1024)).toFixed(1)} [STREAM]`);
+          } else {
+            chunks.push(e.data);
+            const total = chunks.reduce((a, c) => a + c.size, 0);
+            emit('onSize', (total / (1024 * 1024)).toFixed(1));
+          }
         }
       };
-      recorder.onstop = () => finishRecording(pick);
-      recorder.start(250);
 
+      recorder.onstop = () => finishRecording(pick);
       recStart = Date.now();
-      const startFrame = frameCount;
-      recTimer = setInterval(() => {
-        const s = Math.floor((Date.now() - recStart) / 1000);
-        emit('onTimer', {
-          text: `REC ${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`,
-          frames: frameCount - startFrame,
-        });
-      }, 100);
+      recorder.start(250);
+      startUiTelemetryTimer();
+
+      if (canStreamDaemon && sceneMode !== 'screen' && sceneMode !== 'playback') {
+        watchdogTimer = setTimeout(() => {
+          if (mediaBytesSeen === 0 && activeWsSession && !usingFramePipe) {
+            startFramePipeFallback();
+          }
+        }, 900);
+      }
 
       emit('onRecordingState', true);
-      if (pick.fellBack) emit('onNotice', 'MP4 no está disponible en este navegador; grabando en WebM (VP9) real.');
+      if (wsSession) {
+        emit('onNotice', 'Streaming directo a disco (:3370 NVENC) activo — cero límite de RAM.');
+      } else if (pick.fellBack) {
+        emit('onNotice', 'MP4 no está disponible en este navegador; grabando en WebM (VP9) real.');
+      }
       return true;
     }
 
-    function stopRecording() {
+    async function stopRecording() {
+      clearRecordingTimers();
+      if (activeWsSession && framePipeTimer === null && recorder && recorder.state !== 'inactive') {
+        try { recorder.requestData(); } catch {}
+        recorder.stop();
+        return;
+      }
+      if (activeWsSession) {
+        await finalizeWsOnlyStop();
+        return;
+      }
       if (!recorder || recorder.state === 'inactive') return;
       try { recorder.requestData(); } catch { /* optional */ }
       recorder.stop();
     }
 
-    function finishRecording(pick) {
-      clearInterval(recTimer);
+    async function finalizeWsOnlyStop() {
+      const ws = activeWsSession;
+      activeWsSession = null;
+      if (audioMixer) audioMixer.destroy();
+      emit('onRecordingState', false);
+      if (!ws) return;
+      emit('onNotice', 'Finalizando MP4 en GPU (:3370)...');
+      try {
+        const res = await ws.stop();
+        if (!res || !res.success || !res.remoteUrl) {
+          emit('onError', (res && res.error) || 'No se pudo finalizar el stream de captura.');
+          return;
+        }
+        emit('onStop', {
+          blob: null,
+          remoteUrl: res.remoteUrl,
+          outputFile: res.outputFile,
+          sizeBytes: res.sizeBytes,
+          mime: res.outputFile && res.outputFile.endsWith('.webm') ? 'video/webm' : 'video/mp4',
+          ext: res.outputFile && res.outputFile.endsWith('.webm') ? 'webm' : 'mp4',
+          duration: res.duration || Math.max(1, Math.floor((Date.now() - recStart) / 1000)),
+          codec: res.codec || 'h264_nvenc',
+          hardwareAccelerated: Boolean(res.hardwareAccelerated),
+          streamedToDisk: true,
+        });
+      } catch (err) {
+        emit('onError', err && err.message || String(err));
+      }
+    }
+
+    async function finishRecording(pick) {
+      clearRecordingTimers();
+      if (audioMixer) audioMixer.destroy();
+
+      if (activeWsSession) {
+        await finalizeWsOnlyStop();
+        return;
+      }
+
       const mime = recorder.mimeType || pick.mime;
       const ext = mime.includes('mp4') ? 'mp4' : 'webm';
       const duration = Math.max(1, Math.floor((Date.now() - recStart) / 1000));
       const totalBytes = chunks.reduce((a, c) => a + (c ? c.size : 0), 0);
       emit('onRecordingState', false);
       if (totalBytes === 0) {
-        emit('onError', 'El codificador MediaRecorder del navegador devolvió 0 bytes. Cambia a WebM (VP9) / menor FPS o usa RENDER GPU (:3370).');
+        emit('onError', 'El codificador MediaRecorder del navegador devolvió 0 bytes. Activa Daemon :3370 o cambia a WebM (VP9).');
         return;
       }
       const blob = new Blob(chunks, { type: mime });
+      chunks = [];
       emit('onStop', { blob, mime, ext, duration });
     }
 
@@ -225,7 +430,13 @@
     requestAnimationFrame(drawScene);
 
     return {
-      setMode, selectSource, startRecording, stopRecording,
+      setMode, selectSource, showPlayback, startRecording, stopRecording,
+      setAudioMixerGains: (sys, mic) => {
+        if (audioMixer) {
+          audioMixer.setSystemGain(sys);
+          audioMixer.setMicGain(mic);
+        }
+      },
       get mode() { return sceneMode; },
       get fps() { return measuredFps; },
       hasStream: () => !!mediaStream,
