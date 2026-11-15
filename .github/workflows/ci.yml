@@ -16,10 +16,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Install Python helper dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Validate KAPTURA product boundary
         run: python tests/validate_kaptura.py
       - name: Python CLI converter unit tests
         run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Verify portable release bundle builds
+        run: python scripts/build_release.py --output /tmp/kaptura-dist
 
   unit:
     runs-on: ubuntu-latest
@@ -27,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Run full Node test suite (Studio + Daemon + EBWP)
         run: npm test
       - name: Honesty contract logic test
