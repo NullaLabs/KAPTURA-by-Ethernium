@@ -46,14 +46,25 @@
   /* ---- capability chips ------------------------------------------------- */
   (function renderCaps() {
     const row = $('capsRow');
-    const chip = (label, on) => `<span class="cap-chip ${on ? 'on' : 'off'}">${on ? '● ' : '○ '}${label}</span>`;
+    const chip = (label, on, idAttr = '') => `<span ${idAttr} class="cap-chip ${on ? 'on' : 'off'}">${on ? '● ' : '○ '}${label}</span>`;
     row.innerHTML =
       chip('WebGL Lanczos', caps.gpu.webgl) +
       chip('MP4 encode', caps.canMp4) +
       chip('WebM/VP9', caps.canWebmVp9) +
       chip('AV1', caps.canWebmAv1) +
       chip('Workers', caps.workers) +
-      chip('WebCodecs', caps.webcodecs);
+      chip('WebCodecs', caps.webcodecs) +
+      chip('GPU Daemon :3370', false, 'id="capDaemon3370"');
+
+    if (window.KapturaDaemon && window.KapturaDaemon.probeHealth) {
+      window.KapturaDaemon.probeHealth().then((dh) => {
+        const el = $('capDaemon3370');
+        if (!el || !dh || !dh.online) return;
+        const label = dh.hardwareAccelerated ? `NVENC :3370 (${dh.preferredCodec})` : (dh.ffmpegAvailable ? 'Daemon :3370' : 'Daemon :3370 (UI)');
+        el.className = 'cap-chip on';
+        el.textContent = `● ${label}`;
+      });
+    }
   })();
 
   /* ---- Vault (data layer in js/vault.js; URLs owned here) ---------------- */
@@ -227,13 +238,33 @@
         downloadBlob(r.blob, `${baseName(convFile.name)}_${r.width}x${r.height}.gif`);
         status.textContent = `✅ GIF real listo (${r.frames} frames).`;
       } else {
-        status.textContent = `Transcodificando a ${fmt.toUpperCase()} (real)…`;
-        const r = await window.KapturaTranscoder.transcode(convFile, {
-          caps, container: fmt, quality, ...dims,
-          onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
-        });
+        const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
+        status.textContent = useDaemon
+          ? `Transcodificando por GPU Daemon :3370 (${fmt.toUpperCase()})…`
+          : `Transcodificando a ${fmt.toUpperCase()} (real)…`;
+        let r;
+        if (useDaemon) {
+          try {
+            r = await window.KapturaDaemon.transcodeViaDaemon(convFile, {
+              container: fmt, quality, ...dims,
+              onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `GPU :3370 ${Math.round(p * 100)}%`; },
+            });
+          } catch {
+            r = await window.KapturaTranscoder.transcode(convFile, {
+              caps, container: fmt, quality, ...dims,
+              onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
+            });
+          }
+        } else {
+          r = await window.KapturaTranscoder.transcode(convFile, {
+            caps, container: fmt, quality, ...dims,
+            onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
+          });
+        }
         if (r.fellBack) toast('MP4 no soportado aquí; exportado WebM real.', 'notice');
-        downloadBlob(r.blob, `${baseName(convFile.name)}_${r.width}x${r.height}.${r.ext}`);
+        const outW = r.width || dims.width || 'src';
+        const outH = r.height || dims.height || 'src';
+        downloadBlob(r.blob, `${baseName(convFile.name)}_${outW}x${outH}.${r.ext}`);
         status.textContent = `✅ ${r.ext.toUpperCase()} real listo (${r.scaleMode}).`;
       }
       toast('Conversión real completada.', 'success');
@@ -272,14 +303,45 @@
           onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
         });
       } else {
-        status.textContent = 'Comprimiendo vídeo adaptativamente a target budget…';
-        r = await window.KapturaCompressor.compressVideo(file, {
-          targetMB,
-          container: fmt === 'auto' ? 'mp4' : fmt,
-          quality,
-          caps,
-          onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
-        });
+        const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
+        status.textContent = useDaemon
+          ? 'Comprimiendo vídeo con GPU Daemon :3370 hacia target budget…'
+          : 'Comprimiendo vídeo adaptativamente a target budget…';
+        if (useDaemon) {
+          try {
+            const dr = await window.KapturaDaemon.transcodeViaDaemon(file, {
+              targetMB,
+              container: fmt === 'auto' ? 'mp4' : fmt,
+              quality,
+              onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `GPU :3370 ${Math.round(p * 100)}%…`; },
+            });
+            r = {
+              blob: dr.blob,
+              ext: dr.ext,
+              originalSize: file.size,
+              compressedSize: dr.blob.size,
+              savingsPct: Math.max(0, Math.round((1 - dr.blob.size / Math.max(1, file.size)) * 100)),
+              width: dr.width || 'src',
+              height: dr.height || 'src',
+            };
+          } catch {
+            r = await window.KapturaCompressor.compressVideo(file, {
+              targetMB,
+              container: fmt === 'auto' ? 'mp4' : fmt,
+              quality,
+              caps,
+              onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
+            });
+          }
+        } else {
+          r = await window.KapturaCompressor.compressVideo(file, {
+            targetMB,
+            container: fmt === 'auto' ? 'mp4' : fmt,
+            quality,
+            caps,
+            onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
+          });
+        }
       }
 
       compResultBlob = r.blob;

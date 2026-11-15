@@ -3,6 +3,7 @@
 *.png
 *.jpg
 concat_list.txt
+exports/
 node_modules/
 __pycache__/
 

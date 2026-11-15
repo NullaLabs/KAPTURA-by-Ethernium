@@ -93,10 +93,17 @@ fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 7. **⚡ V-CONVERTER**: arrastra un vídeo y transcodifícalo de verdad (MP4/WebM/GIF).
 8. **◆ UPSKALETOR**: reescala imágenes (PNG) y vídeos con Lanczos-3 a 4K UHD; el perfil IA hace handoff.
 
+## ⚡ Modo Dual Híbrido v2.0 (Browser + GPU Daemon `:3370`)
+
+KAPTURA v2.0 unifica el estudio estático de navegador con el microservicio local **`daemon/server.mjs` (`127.0.0.1:3370`)**:
+- **Sin servidor (GitHub Pages / estático):** todo funciona 100% en navegador (`MediaRecorder`, Lanczos CPU/WebGL, GIF89a, SVG Vector, Bóveda IndexedDB).
+- **Con daemon local (`npm run daemon` o `KAPTURA.cmd`):** descubre `ffmpeg` y codificadores reales por hardware (`h264_nvenc` / `h264_amf` / `h264_qsv` / fallback `libx264`), ejecuta transcodificación real y compresión por presupuesto (`/transcode`, `/render`) y emite telemetría **EBWP 32-byte + HLC** (`/health`, `/status`, `/telemetry/ebwp`). Si `ffmpeg` no está presente, la interfaz lo reporta sin simular resultados.
+
 ## 🧪 Tests
 
 ```bash
-npm test                           # ejecuta la suite completa de tests
+npm run daemon                     # inicia Studio + GPU Daemon en http://127.0.0.1:3370
+npm test                           # ejecuta la suite completa de tests (incluye daemon & EBWP)
 python tests/validate_kaptura.py   # contrato estático del producto
 ```
 
