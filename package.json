@@ -1,14 +1,16 @@
 {
   "name": "kaptura-by-ethernium",
-  "version": "1.0.1",
-  "description": "Local-first CHRONO capture studio with real in-browser transcoding (Lanczos + native GIF89a) and an honest handoff to the independent UPSKALETOR engine.",
+  "version": "2.0.0",
+  "description": "Local-first CHRONO capture studio with real in-browser transcoding (Lanczos + native GIF89a), unified GPU NVENC daemon (:3370), and an honest handoff to the independent UPSKALETOR engine.",
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/test_gif_encoder.js && node tests/test_lanczos.js && node tests/test_compressor_svg.js && node tests/test_timing.js",
+    "daemon": "node daemon/server.mjs",
+    "test": "node tests/test_gif_encoder.js && node tests/test_lanczos.js && node tests/test_compressor_svg.js && node tests/test_timing.js && node tests/test_daemon_ebwp.mjs",
     "test:gif": "node tests/test_gif_encoder.js",
     "test:lanczos": "node tests/test_lanczos.js",
     "test:compressor": "node tests/test_compressor_svg.js",
     "test:timing": "node tests/test_timing.js",
+    "test:daemon": "node tests/test_daemon_ebwp.mjs",
     "validate": "python tests/validate_kaptura.py",
     "serve": "python -m http.server 8000"
   },

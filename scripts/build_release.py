@@ -10,22 +10,24 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_FILES = (
     "KAPTURA.cmd",
     "index.html",
-    "video.html",
+    "package.json",
+    "PROJECT_METADATA.json",
     "README.md",
     "UPSKALETOR-HANDOFF.md",
     "CHANGELOG.md",
+    "LICENSE",
     "VERSION",
     "requirements.txt",
     "convert_to_mp4.bat",
     "convert_webm_to_mp4.py",
-    "character_clean_v2.png",
-    "character_lean.png",
-    "character_native.png",
-    "character_original.png",
-    "clean_ethernium_logo.png",
-    "clean_transparent_ethernium_logo.png",
-    "ethernium_logo.png",
-    "master_vector_crisp_logo.png",
+)
+PACKAGE_DIRS = (
+    "css",
+    "fonts",
+    "js",
+    "daemon",
+    "badges",
+    "docs",
 )
 
 
@@ -43,8 +45,9 @@ def build(output_dir: Path) -> tuple[Path, Path]:
         raise SystemExit("VERSION cannot be empty")
 
     missing = [name for name in PACKAGE_FILES if not (ROOT / name).is_file()]
-    if missing:
-        raise SystemExit(f"Missing release files: {missing}")
+    missing_dirs = [name for name in PACKAGE_DIRS if not (ROOT / name).is_dir()]
+    if missing or missing_dirs:
+        raise SystemExit(f"Missing release assets: files={missing} dirs={missing_dirs}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / f"KAPTURA-by-Ethernium-v{version}.zip"
@@ -53,6 +56,11 @@ def build(output_dir: Path) -> tuple[Path, Path]:
         for name in PACKAGE_FILES:
             source = ROOT / name
             bundle.write(source, f"{prefix}/{name}")
+        for dirname in PACKAGE_DIRS:
+            for file_path in sorted((ROOT / dirname).rglob("*")):
+                if file_path.is_file() and "__pycache__" not in file_path.parts:
+                    rel = file_path.relative_to(ROOT).as_posix()
+                    bundle.write(file_path, f"{prefix}/{rel}")
 
     checksum = archive.with_suffix(f"{archive.suffix}.sha256")
     checksum.write_text(f"{sha256(archive)}  {archive.name}\n", encoding="ascii")
