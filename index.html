@@ -19,12 +19,13 @@
   <!-- HEADER -->
   <div class="hud-header">
     <div class="brand-title">
-      <span style="font-size:26px; font-weight:900; letter-spacing:4px; color:var(--white)">KAPTURA</span>
-      <span style="font-size:12px; font-weight:700; letter-spacing:3px; color:var(--cyan); opacity:0.85; margin-left:6px">BY ETHERNIUM</span>
+      <span style="font-size:24px; font-weight:900; letter-spacing:4px; color:var(--white)">KAPTURA</span>
+      <span style="font-size:11px; font-weight:700; letter-spacing:3px; color:var(--cyan); opacity:0.85; margin-left:4px">BY ETHERNIUM</span>
     </div>
-    <div style="display:flex; gap:12px; align-items:center">
-      <div class="hud-badge">ZERO-COST LOCAL STUDIO</div>
-      <div class="hud-badge" style="color:var(--cyan); border-color:rgba(0,240,255,0.3)">100% PRIVACY LOCAL-FIRST</div>
+    <div class="header-actions-bar">
+      <div class="hud-badge">100% LOCAL · ZERO-COST</div>
+      <button class="btn btn-download-pro header-dl-btn" type="button" id="btnDownloadMaster" disabled title="Descarga directa del vídeo maestro activo">⬇ DESCARGAR MASTER</button>
+      <a class="btn btn-download-pro header-dl-btn is-disabled" id="btnDownloadUpscaled" style="text-decoration:none" aria-disabled="true" download="kaptura_upscaled" title="Descarga del resultado de Upskaletor">⬇ DESCARGAR UPSKALED</a>
     </div>
   </div>
 
@@ -207,7 +208,7 @@
         <button class="btn btn-secondary" type="button" id="btnSendToCompressor">▣ → COMPRESOR</button>
         <button class="btn btn-secondary" type="button" id="btnSendToConverter">⚡ → V-CONVERTER</button>
         <button class="btn btn-secondary" type="button" id="btnSendToUpskaletor">◆ → UPSKALETOR</button>
-        <a class="btn btn-secondary" id="btnDownloadActive" style="text-decoration:none" download="kaptura_master.mp4">💾 DESCARGAR</a>
+        <a class="btn btn-download-pro" id="btnDownloadActive" style="text-decoration:none" download="kaptura_master.mp4">⬇ DESCARGAR MASTER</a>
         <button class="btn btn-secondary" type="button" id="btnBackToLive">🔄 MODO CAPTURA</button>
       </div>
     </div>
@@ -319,7 +320,7 @@
       <div class="proc-readout" id="compressorReadout" style="display:inline-block; text-align:left; max-width:600px; width:100%; margin-bottom:14px"></div>
       <div id="compressorCompareBox" style="display:none"></div>
       <div style="margin-top:10px">
-        <a id="btnDownloadCompressed" class="btn btn-primary" style="text-decoration:none; display:inline-block" download="kaptura_compressed">💾 DOWNLOAD COMPRESSED</a>
+        <a id="btnDownloadCompressed" class="btn btn-download-pro" style="text-decoration:none; display:inline-flex" download="kaptura_compressed">⬇ DOWNLOAD COMPRESSED</a>
       </div>
     </div>
   </div>
@@ -469,11 +470,17 @@
         </div>
       </div>
 
-      <div class="engine-actions" style="margin-top:24px">
+      <div class="engine-actions" style="margin-top:20px">
         <span class="boundary-note">OPTIONAL PRIVATE COMPANION — AUTHORIZED OPERATORS ONLY</span>
         <button class="btn btn-secondary" type="button" id="btnCopyCmd">COPY CONSOLE COMMAND</button>
       </div>
-      <div id="upskaletorCompareBox" style="display:none"></div>
+      <div id="upskaletorResult" style="margin-top:14px; display:none; text-align:center">
+        <div class="proc-readout" id="upskaletorReadout" style="display:inline-block; text-align:left; max-width:720px; width:100%; margin-bottom:10px; color:var(--emerald)"></div>
+        <div style="margin-bottom:10px">
+          <a class="btn btn-download-pro is-disabled" id="btnDownloadUpscaledTab" style="text-decoration:none" aria-disabled="true" download="kaptura_upscaled">⬇ DESCARGAR UPSKALED</a>
+        </div>
+        <div id="upskaletorCompareBox" style="display:none"></div>
+      </div>
 
       <div class="boundary-note" id="boundaryNote">
         PRODUCT BOUNDARY // KAPTURA is the visual capture studio and performs real in-browser transcoding (WebM/MP4 re-encode and a native JavaScript GIF encoder).

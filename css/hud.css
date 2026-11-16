@@ -164,6 +164,19 @@ body::before {
   text-shadow: 0 2px 16px rgba(0, 240, 255, 0.25);
 }
 
+.header-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.header-dl-btn {
+  padding: 6px 12px !important;
+  font-size: 9.5px !important;
+  letter-spacing: 0.7px !important;
+}
+
 /* RECESSED CRYSTAL DOCK + 3D BEVELED SQUIRCLE TABS */
 .tab-nav {
   display: flex;
@@ -712,6 +725,40 @@ select:focus, input:focus {
     inset 0 2px 2px rgba(255, 255, 255, 0.56),
     inset 0 -3.5px 8px rgba(65, 0, 15, 0.8),
     0 12px 28px rgba(255, 51, 85, 0.52);
+}
+
+.btn-download-pro {
+  background: linear-gradient(125deg, #00FF9D 0%, #00F0FF 48%, #FFD700 100%);
+  background-size: 260% 260%;
+  animation: liquidShift 4.5s ease infinite;
+  border-color: rgba(255, 255, 255, 0.58);
+  color: #020408;
+  font-weight: 800;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow:
+    0 0 0 2px rgba(1, 2, 5, 0.95),
+    0 2px 0 rgba(255, 255, 255, 0.2),
+    inset 0 2px 1.5px rgba(255, 255, 255, 0.72),
+    inset 0 -3px 6px rgba(0, 40, 28, 0.52),
+    0 10px 26px rgba(0, 255, 157, 0.36),
+    0 4px 12px rgba(0, 0, 0, 0.88);
+}
+
+.btn-download-pro:hover:not(:disabled):not(.is-disabled) {
+  transform: perspective(750px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(-1.5px);
+  box-shadow:
+    0 0 0 2px rgba(1, 2, 5, 0.95),
+    0 2px 0 rgba(255, 255, 255, 0.28),
+    inset 0 2px 2px rgba(255, 255, 255, 0.85),
+    inset 0 -3px 7px rgba(0, 40, 28, 0.6),
+    0 14px 34px rgba(0, 255, 157, 0.54),
+    0 0 22px rgba(255, 215, 0, 0.32);
+}
+
+.btn.is-disabled {
+  opacity: 0.42;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px rgba(1, 2, 5, 0.9) !important;
 }
 
 .btn:active:not(:disabled),

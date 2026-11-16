@@ -234,6 +234,21 @@
     capture.showPlayback(src);
 
     const dl = $('btnDownloadActive');
+    const dlMaster = $('btnDownloadMaster');
+    if (dlMaster) {
+      dlMaster.disabled = false;
+      dlMaster.textContent = `⬇ DESCARGAR (${mb} MB)`;
+      dlMaster.onclick = () => {
+        if (master.remoteUrl) {
+          const a = document.createElement('a');
+          a.href = master.remoteUrl;
+          a.download = master.name;
+          a.click();
+        } else if (master.blob instanceof Blob) {
+          downloadBlob(master.blob, master.name);
+        }
+      };
+    }
     if (master.remoteUrl) {
       dl.href = master.remoteUrl;
       dl.download = master.name;
@@ -865,7 +880,18 @@
   });
 
   /* ---- UPSKALETOR (real Lanczos + A/B Comparator + honest AI handoff) ---- */
-  let upFile = null, upBeforeRevoke = null, upAfterRevoke = null;
+  let upFile = null, upBeforeRevoke = null, upAfterRevoke = null, upResultBlob = null;
+  function setUpscaleDownloadReady(enabled, fileName, text, onClickFn) {
+    [$('btnDownloadUpscaled'), $('btnDownloadUpscaledTab')].forEach((el) => {
+      if (!el) return;
+      el.classList.toggle('is-disabled', !enabled);
+      el.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+      el.download = fileName || 'kaptura_upscaled';
+      el.textContent = text || '⬇ DESCARGAR UPSKALED';
+      el.onclick = onClickFn || null;
+    });
+  }
+
   wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f) => {
     upFile = f;
     const isImg = window.KapturaUpskaletor.isImageFile(f);
@@ -880,6 +906,8 @@
     const engine = $('upskaletorEngineSelect').value;
     const status = $('upskaletorStatus');
     $('btnUpscaleNow').disabled = true;
+    setUpscaleDownloadReady(false, 'kaptura_upscaled', '⬇ DESCARGAR UPSKALED', null);
+    if ($('upskaletorResult')) $('upskaletorResult').style.display = 'none';
     if (upBeforeRevoke) { upBeforeRevoke(); upBeforeRevoke = null; }
     if (upAfterRevoke) { upAfterRevoke(); upAfterRevoke = null; }
     if ($('upskaletorCompareBox')) $('upskaletorCompareBox').style.display = 'none';
@@ -898,12 +926,31 @@
       });
       if (result.mode === 'handoff') {
         // Honest: do NOT fake AI. Hand off the untouched master + real command.
+        upResultBlob = fileObj;
         try { await navigator.clipboard.writeText(result.command); } catch { /* clipboard optional */ }
         downloadBlob(fileObj, fileObj.name);
+        setUpscaleDownloadReady(
+          true,
+          fileObj.name,
+          `⬇ DESCARGAR MASTER (${(fileObj.size / (1024 * 1024)).toFixed(2)} MB)`,
+          (e) => { e.preventDefault(); downloadBlob(upResultBlob, fileObj.name); }
+        );
         status.textContent = '↗ Handoff a UPSKALETOR: master entregado + comando copiado.';
         toast(result.reason, 'notice', 9000);
       } else {
         const name = `${baseName(fileObj.name)}_UPSKALED_${result.width || 'HD'}x${result.height || 'HD'}.${result.ext}`;
+        upResultBlob = result.blob;
+        const sizeMB = (result.blob.size / (1024 * 1024)).toFixed(2);
+        setUpscaleDownloadReady(
+          true,
+          name,
+          `⬇ DESCARGAR ${result.width || ''}×${result.height || ''} (${sizeMB} MB)`,
+          (e) => { e.preventDefault(); downloadBlob(upResultBlob, name); }
+        );
+        if ($('upskaletorReadout')) {
+          $('upskaletorReadout').textContent = `ARCHIVO LISTO: ${name} · ${sizeMB} MB · Motor: ${result.scaleMode}`;
+        }
+        if ($('upskaletorResult')) $('upskaletorResult').style.display = 'block';
         if (window.KapturaComparator && $('upskaletorCompareBox')) {
           const bSrc = mediaPreviewSrc(activeSrc);
           const aSrc = mediaPreviewSrc(result.blob);
