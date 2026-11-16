@@ -53,10 +53,10 @@
         ctx.fillStyle = 'rgba(2, 3, 5, 0.25)'; ctx.fillRect(0, 0, W, H);
         helixAngle += 0.025;
         const numPairs = 72;
-        const radius = H * 0.195;
+        const radius = H * 0.155;
         const length = W * 1.05;
         const startX = -W * 0.025;
-        const nodeScale = Math.max(0.75, H / 1080);
+        const nodeScale = Math.max(0.7, H / 1180);
 
         // Dual continuous translucent DNA backbone ribbons edge-to-edge
         for (let strand = 0; strand < 2; strand++) {

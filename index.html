@@ -14,6 +14,7 @@
 <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
 <div class="hud-container">
+  <div class="chassis-rivets" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
 
   <!-- HEADER -->
   <div class="hud-header">
@@ -61,9 +62,22 @@
           <div class="rec-dot"></div>
           <span id="recTimer" style="color:var(--red); font-weight:700">REC 00:00:00</span>
         </div>
-        <div class="fps-badge" id="fpsDisplay">— FPS</div>
+        <div class="stage-hud-cluster">
+          <button type="button" class="stage-hud-pill" id="btnStageGuides" title="Guías Broadcast (Regla de tercios &amp; Safe Area)">⊞ GUÍAS</button>
+          <div class="fps-badge" id="fpsDisplay">— FPS</div>
+          <div class="stage-hud-pill" id="stageEncoderBadge">BROWSER</div>
+        </div>
         <canvas id="renderCanvas" width="3840" height="2160"></canvas>
         <video id="previewVideo" autoplay playsinline muted></video>
+        <svg class="stage-guides-overlay" id="stageGuidesOverlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+          <line x1="333.3" y1="0" x2="333.3" y2="1000" stroke="rgba(0,240,255,0.22)" stroke-width="1" stroke-dasharray="6 6" />
+          <line x1="666.6" y1="0" x2="666.6" y2="1000" stroke="rgba(0,240,255,0.22)" stroke-width="1" stroke-dasharray="6 6" />
+          <line x1="0" y1="333.3" x2="1000" y2="333.3" stroke="rgba(0,240,255,0.22)" stroke-width="1" stroke-dasharray="6 6" />
+          <line x1="0" y1="666.6" x2="1000" y2="666.6" stroke="rgba(0,240,255,0.22)" stroke-width="1" stroke-dasharray="6 6" />
+          <rect x="50" y="50" width="900" height="900" rx="8" fill="none" stroke="rgba(0,255,157,0.22)" stroke-width="1" stroke-dasharray="10 8" />
+          <line x1="485" y1="500" x2="515" y2="500" stroke="rgba(255,255,255,0.45)" stroke-width="1.2" />
+          <line x1="500" y1="485" x2="500" y2="515" stroke="rgba(255,255,255,0.45)" stroke-width="1.2" />
+        </svg>
         <svg class="stage-chamfer-svg" id="stageChamferSvg" aria-hidden="true">
           <defs>
             <clipPath id="stageChamferClip" clipPathUnits="userSpaceOnUse">
@@ -86,15 +100,15 @@
       </div>
     </div>
 
-    <div class="controls-grid" style="grid-template-columns: repeat(5, 1fr);">
+    <div class="controls-grid" style="grid-template-columns: 1.35fr 1fr 1fr 1fr 1fr;">
       <div class="control-card">
         <div class="control-label">CAPTURE SOURCE / BENCHMARK</div>
         <select id="modeSelect">
-          <option value="screen">🌐 Screen / Window Capture (getDisplayMedia)</option>
+          <option value="screen">🌐 Screen / Window Capture</option>
           <optgroup label="Signal Generator / Benchmark (Canvas)">
             <option value="dna" selected>🧬 3D DNA Helix (Test Signal)</option>
-            <option value="binary">💻 Binary Matrix Stream (Test Signal)</option>
-            <option value="fibonacci">🌀 Fibonacci Vortex (Test Signal)</option>
+            <option value="binary">💻 Binary Matrix Stream</option>
+            <option value="fibonacci">🌀 Fibonacci Vortex</option>
           </optgroup>
         </select>
       </div>
@@ -102,8 +116,8 @@
         <div class="control-label">TARGET RESOLUTION</div>
         <select id="resSelect">
           <option value="3840x2160" selected>🔥 4K UHD (3840x2160)</option>
-          <option value="1920x1080">🎬 Full HD 1080p (1920x1080)</option>
-          <option value="1280x720">📱 720p HD (1280x720)</option>
+          <option value="1920x1080">🎬 Full HD 1080p</option>
+          <option value="1280x720">📱 720p HD</option>
         </select>
       </div>
       <div class="control-card">
@@ -134,26 +148,42 @@
 
     <div class="audio-mixer-bar">
       <div class="audio-channel">
-        <label class="audio-toggle"><input type="checkbox" id="chkSysAudio" checked> 🔊 Audio Sistema / Tab</label>
-        <div class="vu-track"><div class="vu-fill" id="vuSysFill"></div></div>
+        <label class="audio-toggle"><input type="checkbox" id="chkSysAudio" checked> 🔊 Sistema / Tab</label>
+        <div class="vu-meter-box">
+          <div class="vu-track"><div class="vu-fill" id="vuSysFill"></div><div class="vu-peak" id="vuSysPeak"></div></div>
+          <div class="vu-scale"><span>-48</span><span>-24</span><span>-12</span><span>-6</span><span>0dB</span></div>
+        </div>
+        <input type="range" class="gain-fader" id="sysGainSlider" min="0" max="1.5" step="0.05" value="1" title="Ganancia Audio Sistema">
       </div>
       <div class="audio-channel">
         <label class="audio-toggle"><input type="checkbox" id="chkMicAudio"> 🎙️ Micrófono</label>
-        <div class="vu-track"><div class="vu-fill" id="vuMicFill"></div></div>
+        <div class="vu-meter-box">
+          <div class="vu-track"><div class="vu-fill" id="vuMicFill"></div><div class="vu-peak" id="vuMicPeak"></div></div>
+          <div class="vu-scale"><span>-48</span><span>-24</span><span>-12</span><span>-6</span><span>0dB</span></div>
+        </div>
+        <input type="range" class="gain-fader" id="micGainSlider" min="0" max="1.5" step="0.05" value="1" title="Ganancia Micrófono">
       </div>
     </div>
 
     <div class="btn-group">
-      <button class="btn btn-secondary" id="btnSelectSource">🌐 SELECT SOURCE</button>
-      <button class="btn btn-primary" id="btnStartRec">🔴 START RECORDING</button>
-      <button class="btn btn-danger" id="btnStopRec" disabled>⏹️ STOP &amp; SAVE</button>
-      <button class="btn btn-secondary" id="btnGpuRender" disabled title="Genera clip MP4 NVENC directo usando el daemon local :3370">⚡ GPU RENDER (:3370)</button>
-      <div class="export-dropdown">
-        <button class="btn btn-secondary" id="btnExportMenu">💾 EXPORT FORMAT ▼</button>
-        <div class="export-menu" id="exportMenu">
-          <div class="export-item" data-fmt="mp4"><span>🎬 Master MP4</span> <span class="fmt-tag">real re-encode</span></div>
-          <div class="export-item" data-fmt="webm"><span>🌐 WebM Stream</span> <span class="fmt-tag">real re-encode</span></div>
-          <div class="export-item" data-fmt="gif"><span>🎞️ Animated GIF</span> <span class="fmt-tag">native encoder</span></div>
+      <div class="btn-zone" data-zone="FUENTE">
+        <button class="btn btn-secondary" id="btnSelectSource">🌐 SELECT SOURCE <kbd class="keycap-hint">F</kbd></button>
+      </div>
+      <div class="zone-divider" aria-hidden="true"></div>
+      <div class="btn-zone" data-zone="TRANSPORTE">
+        <button class="btn btn-primary" id="btnStartRec">🔴 START RECORDING <kbd class="keycap-hint">R</kbd></button>
+        <button class="btn btn-danger" id="btnStopRec" disabled>⏹️ STOP &amp; SAVE <kbd class="keycap-hint">S</kbd></button>
+      </div>
+      <div class="zone-divider" aria-hidden="true"></div>
+      <div class="btn-zone" data-zone="MOTOR">
+        <button class="btn btn-secondary" id="btnGpuRender" disabled title="Genera clip MP4 NVENC directo usando el daemon local :3370">⚡ GPU RENDER (:3370) <kbd class="keycap-hint">G</kbd></button>
+        <div class="export-dropdown">
+          <button class="btn btn-secondary" id="btnExportMenu">💾 EXPORT FORMAT ▼</button>
+          <div class="export-menu" id="exportMenu">
+            <div class="export-item" data-fmt="mp4"><span>🎬 Master MP4</span> <span class="fmt-tag">real re-encode</span></div>
+            <div class="export-item" data-fmt="webm"><span>🌐 WebM Stream</span> <span class="fmt-tag">real re-encode</span></div>
+            <div class="export-item" data-fmt="gif"><span>🎞️ Animated GIF</span> <span class="fmt-tag">native encoder</span></div>
+          </div>
         </div>
       </div>
     </div>
@@ -163,15 +193,13 @@
         <span id="trimMeta">ACTIVE MASTER: —</span>
         <span id="trimRangeLabel">IN 0.0s → OUT 0.0s</span>
       </div>
-      <div class="trim-sliders">
-        <label class="trim-range-field">
-          <span>IN (Inicio recorte)</span>
-          <input type="range" id="trimStartRange" min="0" max="10" step="0.1" value="0">
-        </label>
-        <label class="trim-range-field">
-          <span>OUT (Fin recorte)</span>
-          <input type="range" id="trimEndRange" min="0" max="10" step="0.1" value="10">
-        </label>
+      <div class="trim-timeline-wrap">
+        <div class="trim-track-bg">
+          <div class="trim-active-bar" id="trimActiveBar"></div>
+        </div>
+        <input type="range" class="trim-dual-input trim-in" id="trimStartRange" min="0" max="10" step="0.1" value="0" aria-label="Inicio recorte IN">
+        <input type="range" class="trim-dual-input trim-out" id="trimEndRange" min="0" max="10" step="0.1" value="10" aria-label="Fin recorte OUT">
+        <div class="trim-ruler"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
       </div>
       <div class="trim-actions">
         <button class="btn btn-primary" type="button" id="btnTrimFast">✂️ TRIM FAST</button>
@@ -479,6 +507,7 @@
 <script src="js/capture.js"></script>
 <script src="js/comparator.js"></script>
 <script src="js/liquid-shader.js"></script>
+<script src="js/studio-selects.js"></script>
 <script src="js/daemon-bridge.js"></script>
 <script src="js/app.js"></script>
 </body>

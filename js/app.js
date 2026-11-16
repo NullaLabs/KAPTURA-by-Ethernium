@@ -66,6 +66,10 @@
         el.className = 'cap-chip on';
         el.textContent = `● ${label}`;
         if (gpuBtn && dh.ffmpegAvailable) gpuBtn.disabled = false;
+        if ($('stageEncoderBadge')) {
+          $('stageEncoderBadge').textContent = dh.hardwareAccelerated ? dh.preferredCodec.toUpperCase() : 'FFMPEG';
+          $('stageEncoderBadge').classList.add('on');
+        }
         if (statD) {
           const eb = window.KapturaDaemon.fetchEbwpTelemetry ? await window.KapturaDaemon.fetchEbwpTelemetry() : null;
           const ebSuffix = eb && eb.ok ? ` · EBWP ${eb.byteLength}B (${eb.magic})` : '';
@@ -201,9 +205,18 @@
   let stageObjectUrl = null;
 
   function updateTrimLabels() {
-    const s = parseFloat($('trimStartRange').value) || 0;
-    const e = parseFloat($('trimEndRange').value) || 0;
+    const startEl = $('trimStartRange');
+    const endEl = $('trimEndRange');
+    const s = parseFloat(startEl.value) || 0;
+    const e = parseFloat(endEl.value) || 0;
+    const maxVal = Math.max(0.1, parseFloat(endEl.max) || 10);
     $('trimRangeLabel').textContent = `IN ${s.toFixed(1)}s → OUT ${e.toFixed(1)}s (dur ${(Math.max(0, e - s)).toFixed(1)}s)`;
+    if ($('trimActiveBar')) {
+      const leftPct = Math.max(0, Math.min(100, (s / maxVal) * 100));
+      const rightPct = Math.max(leftPct, Math.min(100, (e / maxVal) * 100));
+      $('trimActiveBar').style.left = leftPct.toFixed(2) + '%';
+      $('trimActiveBar').style.width = Math.max(1, rightPct - leftPct).toFixed(2) + '%';
+    }
     if (lastMaster) {
       lastMaster.trimStart = s;
       lastMaster.trimEnd = e;
@@ -278,6 +291,9 @@
     });
   }
 
+  let vuSysPeakVal = 0;
+  let vuMicPeakVal = 0;
+
   const capture = window.KapturaCapture.create({
     canvas, video: previewVideo,
     callbacks: {
@@ -294,8 +310,20 @@
         }
       },
       onAudioLevels: ({ sys, mic }) => {
-        if ($('vuSysFill')) $('vuSysFill').style.width = Math.round((sys || 0) * 100) + '%';
-        if ($('vuMicFill')) $('vuMicFill').style.width = Math.round((mic || 0) * 100) + '%';
+        const sysPct = Math.min(100, Math.round((sys || 0) * 100));
+        const micPct = Math.min(100, Math.round((mic || 0) * 100));
+        vuSysPeakVal = sysPct >= vuSysPeakVal ? sysPct : Math.max(0, vuSysPeakVal - 2.2);
+        vuMicPeakVal = micPct >= vuMicPeakVal ? micPct : Math.max(0, vuMicPeakVal - 2.2);
+        if ($('vuSysFill')) $('vuSysFill').style.width = sysPct + '%';
+        if ($('vuMicFill')) $('vuMicFill').style.width = micPct + '%';
+        if ($('vuSysPeak')) {
+          $('vuSysPeak').style.left = vuSysPeakVal.toFixed(1) + '%';
+          $('vuSysPeak').style.opacity = vuSysPeakVal > 2 ? '1' : '0';
+        }
+        if ($('vuMicPeak')) {
+          $('vuMicPeak').style.left = vuMicPeakVal.toFixed(1) + '%';
+          $('vuMicPeak').style.opacity = vuMicPeakVal > 2 ? '1' : '0';
+        }
       },
       onError: (msg) => toast(msg, 'error'),
       onNotice: (msg) => toast(msg, 'notice'),
@@ -304,8 +332,12 @@
         $('btnStartRec').disabled = active;
         $('btnStopRec').disabled = !active;
         if (!active) {
+          vuSysPeakVal = 0;
+          vuMicPeakVal = 0;
           if ($('vuSysFill')) $('vuSysFill').style.width = '0%';
           if ($('vuMicFill')) $('vuMicFill').style.width = '0%';
+          if ($('vuSysPeak')) $('vuSysPeak').style.opacity = '0';
+          if ($('vuMicPeak')) $('vuMicPeak').style.opacity = '0';
           if ($('recorderReadout')) $('recorderReadout').textContent = '';
         }
       },
@@ -369,8 +401,47 @@
       micEnabled: Boolean($('chkMicAudio') && $('chkMicAudio').checked),
       systemMuted: Boolean($('chkSysAudio') && !$('chkSysAudio').checked),
     });
+    const sg = $('sysGainSlider') ? parseFloat($('sysGainSlider').value) : 1;
+    const mg = $('micGainSlider') ? parseFloat($('micGainSlider').value) : 1;
+    setTimeout(() => { if (capture.setAudioMixerGains) capture.setAudioMixerGains(sg, mg); }, 120);
   });
   $('btnStopRec').addEventListener('click', () => capture.stopRecording());
+
+  function syncAudioFaders() {
+    if (!capture.setAudioMixerGains) return;
+    const sysOn = $('chkSysAudio') ? $('chkSysAudio').checked : true;
+    const micOn = $('chkMicAudio') ? $('chkMicAudio').checked : false;
+    const sg = sysOn && $('sysGainSlider') ? parseFloat($('sysGainSlider').value) : 0;
+    const mg = micOn && $('micGainSlider') ? parseFloat($('micGainSlider').value) : 0;
+    capture.setAudioMixerGains(sg, mg);
+  }
+  if ($('sysGainSlider')) $('sysGainSlider').addEventListener('input', syncAudioFaders);
+  if ($('micGainSlider')) $('micGainSlider').addEventListener('input', syncAudioFaders);
+  if ($('chkSysAudio')) $('chkSysAudio').addEventListener('change', syncAudioFaders);
+  if ($('chkMicAudio')) $('chkMicAudio').addEventListener('change', syncAudioFaders);
+
+  if ($('btnStageGuides') && $('stageGuidesOverlay')) {
+    $('btnStageGuides').addEventListener('click', () => {
+      const on = $('stageGuidesOverlay').classList.toggle('visible');
+      $('btnStageGuides').classList.toggle('on', on);
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!$('tab-recorder').classList.contains('active')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'f' && $('btnSelectSource')) { $('btnSelectSource').click(); }
+    else if (k === 'r' && $('btnStartRec') && !$('btnStartRec').disabled) { $('btnStartRec').click(); }
+    else if (k === 's' && $('btnStopRec') && !$('btnStopRec').disabled) { $('btnStopRec').click(); }
+    else if (k === 'g' && $('btnGpuRender') && !$('btnGpuRender').disabled) { $('btnGpuRender').click(); }
+    else if (k === ' ' && capture.mode === 'playback') {
+      e.preventDefault();
+      if (previewVideo.paused) previewVideo.play().catch(() => {});
+      else previewVideo.pause();
+    }
+  });
 
   if ($('btnGpuRender')) {
     $('btnGpuRender').addEventListener('click', async () => {
