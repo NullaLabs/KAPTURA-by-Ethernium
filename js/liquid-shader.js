@@ -191,8 +191,9 @@
       if (rect.width < 8 || rect.height < 8) return;
       const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-      const isCard = target.classList.contains('control-card') || target.classList.contains('vault-card') || target.classList.contains('quick-hero-bar');
-      const maxDeg = isCard ? 2.8 : 7.5;
+      const isRecessed = target.classList.contains('quick-hero-bar');
+      const isCard = target.classList.contains('control-card') || target.classList.contains('vault-card');
+      const maxDeg = isRecessed ? 0 : (isCard ? 2.0 : 4.6);
       const rx = ((0.5 - ny) * maxDeg).toFixed(2) + 'deg';
       const ry = ((nx - 0.5) * maxDeg).toFixed(2) + 'deg';
       target.style.setProperty('--mx', (nx * 100).toFixed(1) + '%');
