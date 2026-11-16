@@ -1,455 +1,994 @@
 :root {
-    --bg-deep: #010204;
-    --bg-mid: #060912;
-    --bg-card: rgba(10, 14, 26, 0.9);
-    --cyan: #00F0FF;
-    --cyan-glow: rgba(0, 240, 255, 0.4);
-    --emerald: #00FF9D;
-    --emerald-glow: rgba(0, 255, 157, 0.4);
-    --gold: #FFD700;
-    --violet: #8B5CF6;
-    --red: #FF3355;
-    --white: #F8FAFC;
-    --muted: #8892A8;
-    --dim: #3D4663;
-    --border: rgba(255, 255, 255, 0.08);
-  }
+  --bg-deep: #010205;
+  --bg-mid: #05070e;
+  --glass-obsidian: rgba(7, 9, 15, 0.56);
+  --glass-card: rgba(11, 14, 23, 0.58);
+  --glass-pill: rgba(14, 18, 28, 0.78);
+  --cyan: #00F0FF;
+  --cyan-glow: rgba(0, 240, 255, 0.38);
+  --emerald: #00FF9D;
+  --emerald-glow: rgba(0, 255, 157, 0.34);
+  --gold: #FFD700;
+  --violet: #8B5CF6;
+  --red: #FF3355;
+  --white: #F8FAFC;
+  --muted: #9AA5BE;
+  --dim: #46506D;
+  --border: rgba(255, 255, 255, 0.12);
+  --rim-top: rgba(255, 255, 255, 0.28);
+  --rim-soft: rgba(255, 255, 255, 0.08);
+}
 
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-  body {
-    background: var(--bg-deep);
-    color: var(--white);
-    font-family: 'Inter', sans-serif;
-    min-height: 100vh;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: flex-start;
-    padding: 30px 20px;
-    overflow-x: hidden;
-  }
+@keyframes liquidShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
 
-  /* HUD CONTAINER */
-  .hud-container {
-    width: 100%; max-width: 1380px;
-    background: linear-gradient(135deg, rgba(8,12,22,0.95), rgba(3,5,10,0.98));
-    border: 1px solid var(--border);
-    border-radius: 24px;
-    padding: 32px 40px;
-    box-shadow: 0 30px 90px rgba(0,0,0,0.9), 0 0 1px rgba(255,255,255,0.1);
-    backdrop-filter: blur(20px);
-    position: relative;
-  }
+@keyframes liquidAuraDrift {
+  0% { transform: translate3d(-4%, -3%, 0) scale(1); }
+  50% { transform: translate3d(4%, 3%, 0) scale(1.06); }
+  100% { transform: translate3d(-4%, -3%, 0) scale(1); }
+}
 
-  .hud-header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 20px; padding-bottom: 16px;
-    border-bottom: 1px solid var(--border);
-  }
+@keyframes recPulse { 0% { opacity: 0.25; } 100% { opacity: 1; } }
 
-  .brand-title {
-    font-family: 'Orbitron', monospace;
-    font-weight: 900; font-size: 24px;
-    letter-spacing: 4px; color: var(--white);
-    display: flex; align-items: center; gap: 12px;
-  }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(24px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
 
-  /* STUDIO TABS */
-  .tab-nav {
-    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    padding-bottom: 12px;
-  }
-  .tab-btn {
-    font-family: 'Fira Code', monospace;
-    font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px;
-    padding: 9px 10px; border-radius: 12px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--border);
-    color: var(--muted); cursor: pointer;
-    white-space: nowrap; flex: 1 1 0; text-align: center;
-    transition: all 0.25s ease;
-  }
-  .tab-btn:hover { color: var(--white); background: rgba(255,255,255,0.08); }
-  .tab-btn.active {
-    background: linear-gradient(135deg, rgba(0,240,255,0.15), rgba(0,255,157,0.15));
-    border-color: var(--cyan); color: var(--cyan);
-    box-shadow: 0 0 18px rgba(0,240,255,0.25);
-  }
+html {
+  background: #010205;
+  color-scheme: dark;
+}
 
-  .tab-content { display: none; }
-  .tab-content.active { display: block; }
+body {
+  background: #010205;
+  color: var(--white);
+  font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 28px 20px;
+  overflow-x: hidden;
+  position: relative;
+}
 
-  /* STAGE FRAME */
-  .stage-frame {
-    width: 100%; height: 500px;
-    background: #000;
-    border-radius: 16px;
-    border: 1px solid rgba(255,255,255,0.08);
-    position: relative; overflow: hidden;
-    display: flex; align-items: center; justify-content: center;
-    margin-bottom: 24px;
-    box-shadow: inset 0 0 50px rgba(0,0,0,0.95);
-  }
+/* Fallback CSS Liquid Obsidian backdrop when WebGL shader initializes or is off */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -12%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(45% 40% at 22% 18%, rgba(0, 240, 255, 0.12), transparent 65%),
+    radial-gradient(42% 38% at 78% 24%, rgba(139, 92, 246, 0.14), transparent 68%),
+    radial-gradient(48% 45% at 52% 82%, rgba(0, 255, 157, 0.09), transparent 70%),
+    #010205;
+  animation: liquidAuraDrift 16s ease-in-out infinite;
+}
 
-  canvas#renderCanvas {
-    width: 100%; height: 100%;
-    object-fit: contain;
-    display: block;
-  }
+#liquidBgShader {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.92;
+}
 
-  video#previewVideo {
-    width: 100%; height: 100%;
-    object-fit: contain;
-    display: none;
-  }
+/* MAIN DARK 3D iOS OBSIDIAN GLASS CONTAINER */
+.hud-container {
+  width: 100%;
+  max-width: 1380px;
+  position: relative;
+  z-index: 2;
+  background:
+    linear-gradient(155deg, rgba(16, 20, 32, 0.62) 0%, rgba(4, 6, 11, 0.78) 55%, rgba(2, 3, 7, 0.88) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 40px;
+  padding: 30px 38px;
+  box-shadow:
+    inset 0 1.5px 1px var(--rim-top),
+    inset 0 -3px 14px rgba(0, 0, 0, 0.88),
+    0 34px 95px rgba(0, 0, 0, 0.92),
+    0 0 60px rgba(0, 240, 255, 0.05);
+  backdrop-filter: blur(36px) saturate(175%);
+  -webkit-backdrop-filter: blur(36px) saturate(175%);
+}
 
-  .rec-indicator {
-    position: absolute; top: 20px; left: 20px;
-    display: flex; align-items: center; gap: 10px;
-    background: rgba(0,0,0,0.85); padding: 8px 18px;
-    border-radius: 20px; border: 1px solid rgba(255,51,85,0.4);
-    font-family: 'Fira Code', monospace; font-size: 12px;
-    opacity: 0; transition: opacity 0.3s ease; backdrop-filter: blur(10px);
-    z-index: 10;
-  }
-  .rec-indicator.active { opacity: 1; }
+.hud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
 
-  .rec-dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--red);
-    box-shadow: 0 0 12px var(--red);
-    animation: recPulse 0.8s infinite alternate;
-  }
-  @keyframes recPulse { 0% { opacity: 0.2; } 100% { opacity: 1; } }
+.brand-title {
+  font-family: 'Orbitron', monospace;
+  font-weight: 900;
+  font-size: 24px;
+  letter-spacing: 4px;
+  color: var(--white);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-shadow: 0 2px 18px rgba(0, 240, 255, 0.22);
+}
 
-  .fps-badge {
-    position: absolute; top: 20px; right: 20px;
-    background: rgba(0,240,255,0.1); border: 1px solid rgba(0,240,255,0.3);
-    padding: 6px 14px; border-radius: 20px;
-    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--cyan);
-    z-index: 10;
-  }
+/* iOS CAPSULE STUDIO TABS */
+.tab-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding: 8px;
+  border-radius: 9999px;
+  background: rgba(4, 6, 11, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.85),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(22px);
+}
 
-  /* CONTROLS GRID */
-  .controls-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
-    margin-bottom: 24px;
-  }
+.tab-btn {
+  --mx: 50%;
+  --my: 20%;
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  overflow: hidden;
+  font-family: 'Fira Code', monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 10px 14px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(10, 13, 20, 0.82) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 1 1 0;
+  text-align: center;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.72),
+    0 6px 14px rgba(0, 0, 0, 0.45);
+  transform: perspective(700px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.22s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
 
-  .control-card {
-    background: rgba(255,255,255,0.02);
-    border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px 18px;
-  }
+.tab-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.22), transparent 58%);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
 
-  .control-label {
-    font-family: 'Fira Code', monospace;
-    font-size: 10px; color: var(--muted);
-    letter-spacing: 2px; margin-bottom: 8px;
-  }
+.tab-btn:hover {
+  color: var(--white);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.tab-btn:hover::after { opacity: 1; }
 
-  select, input {
-    width: 100%; background: #060912;
-    border: 1px solid rgba(255,255,255,0.1);
-    color: var(--white); padding: 8px 12px;
-    border-radius: 8px; font-family: 'Fira Code', monospace;
-    font-size: 12px; outline: none;
-  }
+.tab-btn.active {
+  background: linear-gradient(125deg, rgba(0, 240, 255, 0.22), rgba(10, 14, 24, 0.92), rgba(0, 255, 157, 0.22));
+  background-size: 240% 240%;
+  animation: liquidShift 6s ease infinite;
+  border-color: rgba(0, 240, 255, 0.65);
+  color: var(--white);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.34),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.78),
+    0 0 24px rgba(0, 240, 255, 0.28);
+}
 
-  /* BUTTONS */
-  .btn-group {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-start;
-  }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
 
-  .btn {
-    font-family: 'Orbitron', monospace;
-    font-weight: 700; font-size: 12px; letter-spacing: 1.5px;
-    padding: 12px 20px; border-radius: 12px;
-    border: none; cursor: pointer; white-space: nowrap;
-    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-  }
+/* OVAL 3D STAGE FRAME */
+.stage-frame {
+  width: 100%;
+  height: 500px;
+  background: radial-gradient(circle at 50% 45%, #060911 0%, #000000 100%);
+  border-radius: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.16),
+    inset 0 0 65px rgba(0, 0, 0, 0.95),
+    0 24px 60px rgba(0, 0, 0, 0.72);
+}
 
-  .btn-primary {
-    background: linear-gradient(135deg, #00F0FF 0%, #00A3FF 100%);
-    color: #000; box-shadow: 0 0 25px var(--cyan-glow);
-  }
-  .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 0 35px var(--cyan-glow); }
+canvas#renderCanvas,
+video#previewVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+canvas#renderCanvas { display: block; }
+video#previewVideo { display: none; }
 
-  .btn-secondary {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.15);
-    color: var(--white);
-  }
-  .btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); }
+.rec-indicator {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(5, 7, 12, 0.78);
+  padding: 8px 18px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 51, 85, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 8px 24px rgba(0, 0, 0, 0.6);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  backdrop-filter: blur(18px);
+  z-index: 10;
+}
+.rec-indicator.active { opacity: 1; }
 
-  .btn-danger {
-    background: linear-gradient(135deg, #FF3355 0%, #CC0029 100%);
-    color: #FFF; box-shadow: 0 0 20px rgba(255,51,85,0.4);
-  }
-  .btn-danger:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 0 30px rgba(255,51,85,0.6); }
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 12px var(--red);
+  animation: recPulse 0.8s infinite alternate;
+}
 
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+.fps-badge {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  background: rgba(8, 12, 20, 0.72);
+  border: 1px solid rgba(0, 240, 255, 0.35);
+  padding: 7px 16px;
+  border-radius: 9999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 8px 20px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--cyan);
+  z-index: 10;
+}
 
-  /* MULTI-FORMAT DOWNLOAD MODAL / DROPDOWN */
-  .export-dropdown {
-    position: relative; display: inline-block;
-  }
-  .export-menu {
-    display: none; position: absolute; bottom: 110%; left: 0;
-    min-width: 280px; background: rgba(8, 12, 24, 0.98);
-    border: 1px solid var(--cyan); border-radius: 14px;
-    padding: 10px; box-shadow: 0 15px 40px rgba(0,0,0,0.9);
-    z-index: 100; backdrop-filter: blur(25px);
-  }
-  .export-menu.show { display: block; }
-  .export-item {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; border-radius: 8px; color: var(--white);
-    font-family: 'Fira Code', monospace; font-size: 12px; cursor: pointer;
-    transition: background 0.2s ease;
-  }
-  .export-item:hover { background: rgba(0,240,255,0.15); color: var(--cyan); }
-  .export-item .fmt-tag {
-    font-weight: 700; color: var(--emerald); font-size: 10px;
-    background: rgba(0,255,157,0.1); padding: 3px 8px; border-radius: 4px;
-  }
+/* OVAL 3D LIQUID GLASS CONTROLS GRID */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
 
-  /* TELEMETRY BAR */
-  .telemetry-bar {
-    margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);
-    display: flex; justify-content: space-between; align-items: center;
-    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--muted);
-  }
-  .stat-val { color: var(--white); font-weight: 700; }
+.control-card {
+  --mx: 50%;
+  --my: 20%;
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(20, 25, 38, 0.56) 0%, rgba(6, 8, 14, 0.78) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 26px;
+  padding: 15px 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -3px 10px rgba(0, 0, 0, 0.75),
+    0 14px 32px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(22px) saturate(160%);
+  transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s ease;
+}
 
-  /* VAULT / HISTORIAL GRID */
-  .vault-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px;
-    max-height: 600px; overflow-y: auto; padding-right: 10px;
-  }
-  .vault-card {
-    background: rgba(255,255,255,0.02); border: 1px solid var(--border);
-    border-radius: 16px; padding: 18px; position: relative;
-    transition: border-color 0.25s ease, transform 0.25s ease;
-  }
-  .vault-card:hover { border-color: var(--cyan); transform: translateY(-2px); }
-  .vault-thumb {
-    width: 100%; height: 180px; background: #000; border-radius: 10px;
-    object-fit: cover; margin-bottom: 14px; border: 1px solid rgba(255,255,255,0.05);
-  }
-  .vault-info { font-family: 'Fira Code', monospace; font-size: 12px; color: var(--muted); }
-  .vault-title { font-weight: 700; color: var(--white); font-size: 14px; margin-bottom: 6px; }
-  .vault-actions { display: flex; gap: 10px; margin-top: 14px; }
-  .vault-btn {
-    flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
-    background: rgba(255,255,255,0.05); color: var(--white);
-    font-family: 'Fira Code', monospace; font-size: 11px; cursor: pointer; text-align: center;
-    transition: all 0.2s ease;
-  }
-  .vault-btn:hover { background: var(--cyan); color: #000; border-color: var(--cyan); }
-  .vault-btn.del:hover { background: var(--red); color: #FFF; border-color: var(--red); }
+.control-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.1), transparent 62%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
 
-  /* ADVANCED CONVERTER DROPZONE */
-  .dropzone {
-    width: 100%; height: 260px;
-    border: 2px dashed rgba(0,240,255,0.4); border-radius: 20px;
-    background: rgba(0,240,255,0.02);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    cursor: pointer; transition: all 0.3s ease; text-align: center; padding: 20px;
-  }
-  .dropzone:hover, .dropzone.dragover {
-    border-color: var(--emerald); background: rgba(0,255,157,0.06);
-    box-shadow: 0 0 30px rgba(0,255,157,0.2);
-  }
-  .dz-icon { font-size: 48px; margin-bottom: 12px; }
-  .dz-title { font-family: 'Orbitron', monospace; font-weight: 700; font-size: 16px; color: var(--white); margin-bottom: 6px; }
-  .dz-sub { font-family: 'Fira Code', monospace; font-size: 12px; color: var(--muted); }
+.control-card:hover { border-color: rgba(0, 240, 255, 0.35); }
+.control-card:hover::after { opacity: 1; }
 
-  .progress-bar-bg {
-    width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;
-    overflow: hidden; margin-top: 14px; display: none;
-  }
+.control-label {
+  font-family: 'Fira Code', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 2px;
+  margin-bottom: 9px;
+}
+
+select, input:not([type="checkbox"]):not([type="range"]) {
+  width: 100%;
+  background: rgba(4, 6, 12, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--white);
+  padding: 10px 14px;
+  border-radius: 9999px;
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  outline: none;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+select:focus, input:focus {
+  border-color: var(--cyan);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8), 0 0 14px rgba(0, 240, 255, 0.22);
+}
+
+/* >AAA 3D OVAL PILL BUTTONS WITH MOVING LIQUID SHADER + SPECULAR RIM */
+.btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.btn {
+  --mx: 50%;
+  --my: 18%;
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  font-family: 'Orbitron', monospace;
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 1.4px;
+  padding: 13px 24px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transform-style: preserve-3d;
+  transform: perspective(750px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease, filter 0.25s ease;
+  backdrop-filter: blur(18px);
+}
+
+/* Specular liquid dome + mouse-tracking glint layer */
+.btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.04) 44%, transparent 62%),
+    radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.36), transparent 56%);
+  mix-blend-mode: screen;
+  opacity: 0.72;
+  transition: opacity 0.2s ease;
+}
+
+.btn-primary {
+  background: linear-gradient(115deg, #00F0FF 0%, #00FF9D 32%, #00A8FF 66%, #8B5CF6 100%);
+  background-size: 280% 280%;
+  animation: liquidShift 5.5s ease infinite;
+  border-color: rgba(255, 255, 255, 0.48);
+  color: #020408;
+  font-weight: 800;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.65),
+    inset 0 -4px 8px rgba(0, 35, 55, 0.45),
+    0 12px 28px rgba(0, 240, 255, 0.35),
+    0 6px 14px rgba(0, 0, 0, 0.8);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: perspective(750px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(-2px);
+  box-shadow:
+    inset 0 2px 3px rgba(255, 255, 255, 0.78),
+    inset 0 -4px 10px rgba(0, 35, 55, 0.5),
+    0 16px 38px rgba(0, 240, 255, 0.5),
+    0 8px 18px rgba(0, 0, 0, 0.85);
+}
+
+.btn-secondary {
+  background: linear-gradient(130deg, rgba(24, 30, 44, 0.88) 0%, rgba(8, 10, 17, 0.94) 50%, rgba(18, 28, 42, 0.9) 100%);
+  background-size: 240% 240%;
+  animation: liquidShift 8s ease infinite;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--white);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.28),
+    inset 0 -4px 8px rgba(0, 0, 0, 0.88),
+    0 10px 24px rgba(0, 0, 0, 0.72);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: rgba(0, 240, 255, 0.55);
+  transform: perspective(750px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(-2px);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.38),
+    inset 0 -4px 8px rgba(0, 0, 0, 0.9),
+    0 14px 30px rgba(0, 240, 255, 0.2),
+    0 8px 18px rgba(0, 0, 0, 0.85);
+}
+
+.btn-danger {
+  background: linear-gradient(120deg, #FF3355 0%, #BE123C 48%, #FF6B81 100%);
+  background-size: 260% 260%;
+  animation: liquidShift 5s ease infinite;
+  border-color: rgba(255, 180, 195, 0.45);
+  color: #FFF;
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.42),
+    inset 0 -4px 8px rgba(65, 0, 15, 0.65),
+    0 12px 28px rgba(255, 51, 85, 0.42),
+    0 6px 14px rgba(0, 0, 0, 0.82);
+}
+
+.btn-danger:hover:not(:disabled) {
+  transform: perspective(750px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(-2px);
+  box-shadow:
+    inset 0 2px 3px rgba(255, 255, 255, 0.55),
+    inset 0 -4px 9px rgba(65, 0, 15, 0.75),
+    0 16px 36px rgba(255, 51, 85, 0.58);
+}
+
+.btn:active:not(:disabled),
+.tab-btn:active,
+.vault-btn:active {
+  transform: perspective(750px) translateY(2px) scale(0.972) !important;
+  box-shadow:
+    inset 0 3px 8px rgba(0, 0, 0, 0.85),
+    0 3px 10px rgba(0, 0, 0, 0.7) !important;
+}
+
+.btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* MULTI-FORMAT DOWNLOAD DROPDOWN */
+.export-dropdown { position: relative; display: inline-block; }
+.export-menu {
+  display: none;
+  position: absolute;
+  bottom: 118%;
+  left: 0;
+  min-width: 280px;
+  background: rgba(6, 9, 16, 0.92);
+  border: 1px solid rgba(0, 240, 255, 0.5);
+  border-radius: 26px;
+  padding: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 24px 55px rgba(0, 0, 0, 0.92);
+  z-index: 100;
+  backdrop-filter: blur(28px);
+}
+.export-menu.show { display: block; }
+.export-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 9999px;
+  color: var(--white);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.18s ease;
+}
+.export-item:hover {
+  background: rgba(0, 240, 255, 0.16);
+  color: var(--cyan);
+  transform: translateX(3px);
+}
+.export-item .fmt-tag {
+  font-weight: 700;
+  color: var(--emerald);
+  font-size: 10px;
+  background: rgba(0, 255, 157, 0.12);
+  padding: 4px 10px;
+  border-radius: 9999px;
+}
+
+/* TELEMETRY BAR */
+.telemetry-bar {
+  margin-top: 24px;
+  padding: 14px 20px;
+  border-radius: 9999px;
+  background: rgba(4, 6, 12, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -2px 6px rgba(0, 0, 0, 0.75);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.stat-val { color: var(--white); font-weight: 700; }
+
+/* VAULT / HISTORIAL GRID */
+.vault-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.vault-card {
+  --mx: 50%;
+  --my: 20%;
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(16, 20, 32, 0.68) 0%, rgba(5, 7, 13, 0.86) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 30px;
+  padding: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -3px 12px rgba(0, 0, 0, 0.85),
+    0 18px 40px rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(24px);
+  transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: border-color 0.25s ease, transform 0.25s ease;
+}
+.vault-card:hover {
+  border-color: rgba(0, 240, 255, 0.55);
+  transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry)) translateY(-2px);
+}
+.vault-thumb {
+  width: 100%;
+  height: 180px;
+  background: #000;
+  border-radius: 22px;
+  object-fit: cover;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.vault-info { font-family: 'Fira Code', monospace; font-size: 11.5px; color: var(--muted); }
+.vault-title { font-weight: 700; color: var(--white); font-size: 14px; margin-bottom: 6px; word-break: break-all; }
+.vault-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+.vault-btn {
+  --mx: 50%;
+  --my: 20%;
+  --rx: 0deg;
+  --ry: 0deg;
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(10, 14, 22, 0.9) 100%);
+  color: var(--white);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), inset 0 -2px 5px rgba(0, 0, 0, 0.8), 0 6px 14px rgba(0, 0, 0, 0.55);
+  transition: all 0.2s ease;
+}
+.vault-btn:hover { background: var(--cyan); color: #000; border-color: var(--cyan); }
+.vault-btn.del:hover { background: var(--red); color: #FFF; border-color: var(--red); }
+
+/* OVAL DROPZONE */
+.dropzone {
+  width: 100%;
+  height: 250px;
+  border: 2px dashed rgba(0, 240, 255, 0.36);
+  border-radius: 34px;
+  background: linear-gradient(155deg, rgba(0, 240, 255, 0.05), rgba(4, 6, 12, 0.74));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: center;
+  padding: 20px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -10px 30px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(20px);
+}
+.dropzone:hover, .dropzone.dragover {
+  border-color: var(--emerald);
+  background: linear-gradient(155deg, rgba(0, 255, 157, 0.1), rgba(4, 6, 12, 0.78));
+  box-shadow: 0 0 36px rgba(0, 255, 157, 0.22);
+}
+.dz-icon { font-size: 46px; margin-bottom: 12px; }
+.dz-title { font-family: 'Orbitron', monospace; font-weight: 700; font-size: 15.5px; color: var(--white); margin-bottom: 6px; }
+.dz-sub { font-family: 'Fira Code', monospace; font-size: 12px; color: var(--muted); }
+
+.progress-bar-bg {
+  width: 100%;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  margin-top: 14px;
+  display: none;
+}
+.progress-bar-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--cyan), var(--emerald), var(--violet));
+  background-size: 200% 100%;
+  animation: liquidShift 3s ease infinite;
+  transition: width 0.2s ease;
+}
+
+.engine-panel {
+  padding: 34px;
+  border: 1px solid rgba(139, 92, 246, 0.42);
+  border-radius: 34px;
+  background:
+    radial-gradient(circle at top right, rgba(139, 92, 246, 0.18), transparent 42%),
+    linear-gradient(155deg, rgba(14, 17, 29, 0.68), rgba(4, 6, 12, 0.85));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.2),
+    inset 0 -4px 12px rgba(0, 0, 0, 0.82),
+    0 24px 60px rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(26px);
+}
+.engine-kicker {
+  font-family: 'Fira Code', monospace;
+  color: var(--violet);
+  letter-spacing: 3px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.engine-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 30px;
+  margin: 12px 0;
+  letter-spacing: 3px;
+}
+.engine-copy {
+  color: var(--muted);
+  line-height: 1.75;
+  max-width: 920px;
+}
+.engine-actions { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+
+.boundary-note {
+  margin-top: 24px;
+  padding: 16px 22px;
+  border-left: 3px solid var(--emerald);
+  border-radius: 22px;
+  background: rgba(0, 255, 157, 0.05);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* BADGES, TOASTS & CAPABILITY CHIPS */
+.hud-badge {
+  font-family: 'Fira Code', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--emerald);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(6, 10, 16, 0.82));
+  border: 1px solid rgba(0, 255, 157, 0.36);
+  border-radius: 9999px;
+  padding: 7px 14px;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 6px 16px rgba(0, 0, 0, 0.55);
+}
+
+.toast-stack {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 390px;
+}
+.toast {
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 13px 18px;
+  border-radius: 22px;
+  color: var(--white);
+  background: rgba(6, 9, 16, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 16px 42px rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(22px);
+  animation: toastIn 0.25s ease;
+}
+.toast.error   { border-color: rgba(255, 51, 85, 0.55);  border-left: 4px solid var(--red); }
+.toast.notice  { border-color: rgba(0, 240, 255, 0.45);  border-left: 4px solid var(--cyan); }
+.toast.success { border-color: rgba(0, 255, 157, 0.5);   border-left: 4px solid var(--emerald); }
+
+.caps-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 18px; }
+.cap-chip {
+  font-family: 'Fira Code', monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+  background: rgba(8, 11, 18, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.cap-chip.on  { color: var(--emerald); border-color: rgba(0, 255, 157, 0.42); background: rgba(0, 255, 157, 0.08); }
+.cap-chip.off { color: var(--dim); }
+
+.proc-readout { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* ===== V3.0 WORKFLOW: QUICK HERO, DUAL AUDIO VU, STAGE TRIM DOCK, A/B COMPARATOR ===== */
+.quick-hero-bar {
+  --mx: 50%;
+  --my: 20%;
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 15px 22px;
+  margin-bottom: 16px;
+  border-radius: 9999px;
+  background: linear-gradient(125deg, rgba(16, 24, 38, 0.74), rgba(5, 8, 15, 0.88), rgba(0, 240, 255, 0.08));
+  background-size: 220% 220%;
+  animation: liquidShift 10s ease infinite;
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.22),
+    inset 0 -3px 10px rgba(0, 0, 0, 0.8),
+    0 14px 36px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(22px);
+  transform: perspective(1000px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.quick-hero-copy {
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--white);
+}
+.quick-hero-copy span { color: var(--muted); display: block; font-size: 11px; margin-top: 3px; }
+.quick-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.audio-mixer-bar {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  margin-bottom: 14px;
+  padding: 12px 20px;
+  border-radius: 9999px;
+  background: rgba(6, 9, 16, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -3px 8px rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(18px);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+}
+.audio-channel { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; }
+.audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  color: var(--white);
+  white-space: nowrap;
+}
+.vu-track {
+  flex: 1;
+  height: 9px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+.vu-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--emerald), var(--cyan), var(--gold));
+  transition: width 80ms linear;
+}
+
+.stage-trim-dock {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 18px 22px;
+  border-radius: 28px;
+  background: linear-gradient(155deg, rgba(11, 16, 26, 0.82), rgba(4, 7, 13, 0.92));
+  border: 1px solid rgba(0, 255, 157, 0.36);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.2),
+    inset 0 -4px 10px rgba(0, 0, 0, 0.82),
+    0 18px 40px rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(24px);
+}
+.stage-trim-dock.open { display: flex; }
+.trim-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--emerald);
+}
+.trim-sliders {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: center;
+}
+.trim-range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.trim-range-field input[type="range"] { width: 100%; accent-color: var(--cyan); }
+.trim-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+.estimate-pill {
+  margin-top: 12px;
+  padding: 10px 18px;
+  border-radius: 9999px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px dashed rgba(0, 240, 255, 0.42);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--cyan);
+  display: none;
+  text-align: center;
+}
+
+.compare-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 780px;
+  margin: 18px auto 0;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #04060b;
+  aspect-ratio: 16 / 9;
+  user-select: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 18px 42px rgba(0, 0, 0, 0.78);
+}
+.compare-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.compare-after {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  clip-path: inset(0 0 0 50%);
+}
+.compare-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 14px var(--cyan);
+  pointer-events: none;
+  z-index: 4;
+}
+.compare-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: ew-resize;
+  z-index: 5;
+  margin: 0;
+}
+.compare-tag {
+  position: absolute;
+  top: 12px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  z-index: 4;
+  font-family: 'Fira Code', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(4, 6, 12, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: var(--white);
+  backdrop-filter: blur(12px);
+}
+.compare-tag.left { left: 12px; }
+.compare-tag.right { right: 12px; color: var(--emerald); border-color: rgba(0, 255, 157, 0.45); }
+
+@media (max-width: 900px) {
+  .tab-nav { border-radius: 26px; }
+  .tab-btn { flex: 1 1 auto; }
+  .controls-grid { grid-template-columns: 1fr; }
+  .quick-hero-bar, .audio-mixer-bar, .telemetry-bar { border-radius: 26px; }
+}
+
+@media (max-width: 720px) {
+  .hud-container { padding: 20px 16px; border-radius: 28px; }
+  .controls-grid { grid-template-columns: 1fr 1fr !important; }
+  .btn-group { flex-wrap: wrap; }
+  .brand-title { font-size: 18px; }
+  .stage-frame { height: 300px; border-radius: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .tab-btn.active,
+  .quick-hero-bar,
   .progress-bar-fill {
-    width: 0%; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--emerald));
-    transition: width 0.2s ease;
+    animation: none !important;
   }
-
-  .engine-panel {
-    padding: 34px;
-    border: 1px solid rgba(139, 92, 246, 0.45);
-    border-radius: 20px;
-    background:
-      radial-gradient(circle at top right, rgba(139, 92, 246, 0.16), transparent 38%),
-      rgba(255,255,255,0.02);
-  }
-  .engine-kicker {
-    font-family: 'Fira Code', monospace;
-    color: var(--violet); letter-spacing: 3px; font-size: 11px; font-weight: 700;
-  }
-  .engine-title {
-    font-family: 'Orbitron', monospace;
-    font-size: 30px; margin: 12px 0; letter-spacing: 3px;
-  }
-  .engine-copy {
-    color: var(--muted); line-height: 1.75; max-width: 920px;
-  }
-  .engine-grid {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
-    margin: 28px 0;
-  }
-  .engine-card {
-    padding: 18px; border-radius: 14px; border: 1px solid var(--border);
-    background: rgba(0,0,0,0.25);
-  }
-  .engine-card strong {
-    display: block; font-family: 'Fira Code', monospace; color: var(--white);
-    margin-bottom: 8px;
-  }
-  .engine-card span { color: var(--muted); font-size: 13px; line-height: 1.55; }
-  .engine-actions { display: flex; gap: 14px; flex-wrap: wrap; }
-  .engine-link { text-decoration: none; }
-  .boundary-note {
-    margin-top: 24px; padding: 14px 18px; border-left: 3px solid var(--emerald);
-    background: rgba(0,255,157,0.05); color: var(--muted);
-    font-family: 'Fira Code', monospace; font-size: 12px; line-height: 1.65;
-  }
-  @media (max-width: 900px) {
-    .tab-nav { flex-wrap: wrap; }
-    .tab-btn { flex: 1 1 auto; }
-    .controls-grid, .engine-grid { grid-template-columns: 1fr; }
-  }
-
-  /* ===== ADDED: badges, toasts, capability chips, responsive ===== */
-  .hud-badge {
-    font-family: 'Fira Code', monospace; font-size: 10px; font-weight: 700;
-    letter-spacing: 2px; color: var(--emerald);
-    border: 1px solid rgba(0,255,157,0.3); border-radius: 8px;
-    padding: 6px 12px; white-space: nowrap;
-  }
-
-  /* Non-blocking toast stack (replaces alert/console-only errors) */
-  .toast-stack {
-    position: fixed; top: 20px; right: 20px; z-index: 9999;
-    display: flex; flex-direction: column; gap: 10px; max-width: 380px;
-  }
-  .toast {
-    font-family: 'Fira Code', monospace; font-size: 12px; line-height: 1.5;
-    padding: 12px 16px; border-radius: 10px; color: var(--white);
-    background: rgba(10,14,26,0.97); border: 1px solid var(--border);
-    box-shadow: 0 12px 40px rgba(0,0,0,0.6); backdrop-filter: blur(14px);
-    animation: toastIn 0.25s ease;
-  }
-  .toast.error   { border-color: rgba(255,51,85,0.55);  border-left: 3px solid var(--red); }
-  .toast.notice  { border-color: rgba(0,240,255,0.4);   border-left: 3px solid var(--cyan); }
-  .toast.success { border-color: rgba(0,255,157,0.45);  border-left: 3px solid var(--emerald); }
-  @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
-
-  /* Capability chips row */
-  .caps-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 18px; }
-  .cap-chip {
-    font-family: 'Fira Code', monospace; font-size: 10px; letter-spacing: 1px;
-    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
-    color: var(--muted); background: rgba(255,255,255,0.02);
-  }
-  .cap-chip.on  { color: var(--emerald); border-color: rgba(0,255,157,0.35); }
-  .cap-chip.off { color: var(--dim); }
-
-  /* Real progress readout */
-  .proc-readout { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted); margin-top: 6px; }
-
-  /* Responsive: the app no longer forces a 1920px viewport */
-  @media (max-width: 720px) {
-    .hud-container { padding: 20px 16px; }
-    .controls-grid { grid-template-columns: 1fr 1fr !important; }
-    .btn-group { flex-wrap: wrap; }
-    .brand-title { font-size: 18px; }
-    .stage-frame { height: 300px; }
-  }
-
-  /* ===== V3.0 WORKFLOW: QUICK HERO, DUAL AUDIO VU, STAGE TRIM DOCK, A/B COMPARATOR ===== */
-  .quick-hero-bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
-    padding: 12px 16px; margin-bottom: 14px; border-radius: 14px;
-    background: linear-gradient(90deg, rgba(0,240,255,0.08), rgba(0,255,157,0.05));
-    border: 1px solid rgba(0,240,255,0.28);
-  }
-  .quick-hero-copy {
-    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--white);
-  }
-  .quick-hero-copy span { color: var(--muted); display: block; font-size: 11px; margin-top: 3px; }
-  .quick-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-
-  .audio-mixer-bar {
-    display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
-    margin-top: 12px; padding: 10px 14px; border-radius: 12px;
-    background: rgba(10,14,26,0.75); border: 1px solid var(--border);
-    font-family: 'Fira Code', monospace; font-size: 11px;
-  }
-  .audio-channel { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; }
-  .audio-toggle {
-    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-    color: var(--white); white-space: nowrap;
-  }
-  .vu-track {
-    flex: 1; height: 8px; border-radius: 999px; overflow: hidden;
-    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-  }
-  .vu-fill {
-    width: 0%; height: 100%; border-radius: 999px;
-    background: linear-gradient(90deg, var(--emerald), var(--cyan), var(--gold));
-    transition: width 80ms linear;
-  }
-
-  .stage-trim-dock {
-    display: none; flex-direction: column; gap: 12px; margin-top: 14px;
-    padding: 14px 16px; border-radius: 14px;
-    background: rgba(10,14,26,0.88); border: 1px solid rgba(0,255,157,0.3);
-  }
-  .stage-trim-dock.open { display: flex; }
-  .trim-header {
-    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-    font-family: 'Fira Code', monospace; font-size: 12px; color: var(--emerald);
-  }
-  .trim-sliders {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: center;
-  }
-  .trim-range-field {
-    display: flex; flex-direction: column; gap: 4px;
-    font-family: 'Fira Code', monospace; font-size: 11px; color: var(--muted);
-  }
-  .trim-range-field input[type="range"] { width: 100%; accent-color: var(--cyan); }
-  .trim-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-
-  .estimate-pill {
-    margin-top: 10px; padding: 8px 12px; border-radius: 10px;
-    background: rgba(0,240,255,0.06); border: 1px dashed rgba(0,240,255,0.35);
-    font-family: 'Fira Code', monospace; font-size: 11px; color: var(--cyan);
-    display: none; text-align: center;
-  }
-
-  .compare-wrap {
-    position: relative; width: 100%; max-width: 780px; margin: 16px auto 0;
-    border-radius: 14px; overflow: hidden; border: 1px solid var(--border);
-    background: #050811; aspect-ratio: 16 / 9; user-select: none;
-  }
-  .compare-media {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block;
-  }
-  .compare-after {
-    position: absolute; inset: 0; width: 100%; height: 100%; clip-path: inset(0 0 0 50%);
-  }
-  .compare-divider {
-    position: absolute; top: 0; bottom: 0; width: 2px; background: var(--cyan);
-    box-shadow: 0 0 12px var(--cyan); pointer-events: none; z-index: 4;
-  }
-  .compare-slider {
-    position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 5; margin: 0;
-  }
-  .compare-tag {
-    position: absolute; top: 10px; padding: 4px 9px; border-radius: 6px; z-index: 4;
-    font-family: 'Fira Code', monospace; font-size: 10px; font-weight: 700;
-    background: rgba(5,8,17,0.82); border: 1px solid rgba(255,255,255,0.18); color: var(--white);
-  }
-  .compare-tag.left { left: 10px; }
-  .compare-tag.right { right: 10px; color: var(--emerald); border-color: rgba(0,255,157,0.4); }
+}
