@@ -184,7 +184,7 @@
     const safeFps = Math.max(10, Math.min(30, Math.round(fps || 24)));
     const totalFrames = Math.max(2, Math.round(clipDur * safeFps));
 
-    const scaler = Scaler.create({ quality: opts.quality || 'fast', caps: opts.caps });
+    const scaler = Scaler.create({ quality: opts.quality || 'fast', caps: opts.caps, sharpen: opts.sharpen || 0 });
     const canvas = document.createElement('canvas');
     canvas.width = dw; canvas.height = dh;
     const cctx = canvas.getContext('2d');
@@ -254,7 +254,7 @@
     }
 
     const pick = Caps.pickMimeType(caps, container);
-    const scaler = Scaler.create({ quality: opts.quality || 'fast', caps });
+    const scaler = Scaler.create({ quality: opts.quality || 'fast', caps, sharpen: opts.sharpen || 0 });
 
     const canvas = document.createElement('canvas');
     canvas.width = dw; canvas.height = dh;

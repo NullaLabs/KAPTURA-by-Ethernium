@@ -37,6 +37,7 @@
       cachedHealth = {
         online: Boolean(data && data.online),
         ffmpegAvailable: Boolean(data && data.capabilities && data.capabilities.ffmpegAvailable),
+        neuralAvailable: Boolean((data && data.capabilities && data.capabilities.neuralAvailable) || (data && data.providers && data.providers.realEsrgan)),
         preferredCodec: (data && data.capabilities && data.capabilities.preferredCodec) || null,
         hardwareAccelerated: Boolean(data && data.capabilities && data.capabilities.hardwareAccelerated),
         providers: (data && data.providers) || {},
@@ -54,6 +55,10 @@
 
   function isReadyForTranscode() {
     return Boolean(cachedHealth && cachedHealth.online && cachedHealth.ffmpegAvailable);
+  }
+
+  function isNeuralAvailable() {
+    return Boolean(cachedHealth && cachedHealth.online && cachedHealth.neuralAvailable);
   }
 
   function fileExt(name) {
@@ -103,6 +108,8 @@
     if (opts.fps) headers['X-Kaptura-Fps'] = String(opts.fps);
     if (opts.bitrateMbps) headers['X-Kaptura-Bitrate'] = String(opts.bitrateMbps);
     if (opts.targetMB) headers['X-Kaptura-Target-MB'] = String(opts.targetMB);
+    if (Number(opts.sharpen) > 0) headers['X-Kaptura-Sharpen'] = String(opts.sharpen);
+    if (opts.cfr) headers['X-Kaptura-Cfr'] = '1';
     if (Number(opts.startSec) > 0) headers['X-Kaptura-Start-Sec'] = String(opts.startSec);
     if (Number(opts.endSec) > 0) headers['X-Kaptura-End-Sec'] = String(opts.endSec);
 
@@ -380,13 +387,66 @@
     }
   }
 
+  async function upscaleAiViaDaemon(file, opts) {
+    opts = opts || {};
+    const taskId = opts.taskId || nextTaskId('ai');
+    const sourceExport = opts.sourceExport || (file && file.remoteUrl) || '';
+    const isImg = /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test((file && file.name) || sourceExport) || (file && file.type && file.type.startsWith('image/'));
+    const headers = {
+      'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
+      'X-Kaptura-Ai-Model': opts.model || 'realesr-general-x4v3',
+      'X-Kaptura-Scale': String(opts.scale || 4),
+      'X-Kaptura-Quality': opts.quality || 'high',
+      'X-Kaptura-Task-Id': taskId,
+      'Accept': 'application/octet-stream',
+    };
+    if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
+    if (opts.width) headers['X-Kaptura-Width'] = String(opts.width);
+    if (opts.height) headers['X-Kaptura-Height'] = String(opts.height);
+    if (opts.denoise) headers['X-Kaptura-Denoise'] = 'true';
+
+    if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
+    const stopSse = subscribeTaskProgress(taskId, opts.onProgress);
+
+    try {
+      const res = await fetch(`${DAEMON_BASE}/upscale-ai?download=1`, {
+        method: 'POST',
+        headers,
+        body: sourceExport ? new Uint8Array(0) : file,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`);
+        throw new Error(`Daemon :3370 neural upscale failed: ${errText}`);
+      }
+      const blob = await res.blob();
+      if (typeof opts.onProgress === 'function') opts.onProgress(1, { taskId, stage: 'COMPLETE' });
+      const ext = isImg ? 'png' : 'mp4';
+      return {
+        blob,
+        mime: isImg ? 'image/png' : 'video/mp4',
+        ext,
+        width: opts.width || 0,
+        height: opts.height || 0,
+        model: res.headers.get('X-Kaptura-Model') || opts.model || 'realesr-general-x4v3',
+        scaleMode: `Real-ESRGAN (${opts.model || 'realesr-general-x4v3'})`,
+        neural: true,
+        fellBack: false,
+        viaDaemon: true,
+      };
+    } finally {
+      stopSse();
+    }
+  }
+
   const api = {
     DAEMON_BASE,
     probeHealth,
     getCachedHealth,
     isReadyForTranscode,
+    isNeuralAvailable,
     subscribeTaskProgress,
     transcodeViaDaemon,
+    upscaleAiViaDaemon,
     trimViaDaemon,
     openCaptureSocket,
     renderViaDaemon,

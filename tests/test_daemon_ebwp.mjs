@@ -50,6 +50,8 @@ async function run() {
     const health = JSON.parse(healthRes.body.toString("utf8"));
     assert.equal(health.online, true);
     assert.equal(health.port, port);
+    assert.equal(typeof health.capabilities.neuralAvailable, "boolean", "Daemon /health must report neuralAvailable capability");
+    assert.equal(typeof health.providers.realEsrgan, "boolean", "Daemon /health must report realEsrgan provider availability");
 
     const statusRes = await httpRequest(port, "/status");
     assert.equal(statusRes.status, 200);
@@ -71,6 +73,8 @@ async function run() {
     assert.equal(badJsonRes.status, 400, "Malformed JSON on /render must return 400 Bad Request");
     const emptyTxRes = await httpRequest(port, "/transcode?download=1", "POST", { "Accept": "application/octet-stream" }, Buffer.alloc(0));
     assert.equal(emptyTxRes.status, 400, "Empty body on /transcode must return 400 Bad Request");
+    const emptyAiRes = await httpRequest(port, "/upscale-ai?download=1", "POST", { "Accept": "application/octet-stream" }, Buffer.alloc(0));
+    assert.equal(emptyAiRes.status, 400, "Empty body on /upscale-ai must return 400 Bad Request");
     console.log("  PASS  Daemon /health, /status, /telemetry/ebwp, UI serve, validation & traversal guard");
 
     if (health.capabilities && health.capabilities.ffmpegAvailable) {
@@ -127,7 +131,7 @@ async function run() {
       assert.ok(trimJson.sizeBytes > 500, "Trimmed MP4 must be non-empty");
       if (trimJson.videoPath) createdArtifacts.push(trimJson.videoPath);
 
-      // Test /transcode binary download
+      // Test /transcode binary download with CAS unsharp + CFR
       const txRes = await httpRequest(
         port,
         "/transcode?download=1",
@@ -139,11 +143,27 @@ async function run() {
           "X-Kaptura-Width": "160",
           "X-Kaptura-Height": "90",
           "X-Kaptura-Quality": "fast",
+          "X-Kaptura-Sharpen": "0.65",
+          "X-Kaptura-Cfr": "1",
         },
         srcBuf
       );
       assert.equal(txRes.status, 200);
-      assert.ok(txRes.body.length > 500, "Transcoded stream must be non-empty MP4");
+      assert.ok(txRes.body.length > 500, "Transcoded stream with sharpen+CFR must be non-empty MP4");
+
+      if (!health.capabilities.neuralAvailable) {
+        const aiGuardRes = await httpRequest(
+          port,
+          "/upscale-ai",
+          "POST",
+          { "X-Kaptura-Ext": ".mp4", "X-Kaptura-Ai-Model": "realesr-general-x4v3" },
+          srcBuf
+        );
+        assert.equal(aiGuardRes.status, 422, "POST /upscale-ai must return 422 when realesrgan-ncnn-vulkan is absent");
+        const aiGuardJson = JSON.parse(aiGuardRes.body.toString("utf8"));
+        assert.equal(aiGuardJson.success, false);
+        assert.equal(aiGuardJson.status, "realesrgan_unavailable");
+      }
 
       // Test WebSocket /ws/capture streaming pipe-media mode
       if (typeof WebSocket === "function") {

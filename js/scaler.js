@@ -17,6 +17,7 @@
   function create(opts) {
     opts = opts || {};
     const quality = opts.quality || 'fast';          // 'fast' | 'max'
+    const defaultSharpen = Number(opts.sharpen) || 0;
     const caps = opts.caps || {};
     const scratch = document.createElement('canvas');
     const sctx = scratch.getContext('2d', { willReadFrequently: true });
@@ -28,16 +29,17 @@
     if (quality === 'max') {
       if (caps.gpu && caps.gpu.webgl && root.KapturaLanczosGL) {
         gpu = root.KapturaLanczosGL.create();
-        mode = gpu ? 'lanczos-gpu' : (root.KapturaLanczos ? 'lanczos-cpu' : 'fast');
+        mode = gpu ? (defaultSharpen > 0 ? 'lanczos-cas-gpu' : 'lanczos-gpu') : (root.KapturaLanczos ? 'lanczos-cpu' : 'fast');
       } else if (root.KapturaLanczos) {
         mode = 'lanczos-cpu';
       }
     }
 
     /** Resize any drawable source to dw x dh; returns a canvas (reused). */
-    function toCanvas(source, sw, sh, dw, dh) {
-      if (mode === 'lanczos-gpu') {
-        try { return gpu.resize(source, sw, sh, dw, dh); }
+    function toCanvas(source, sw, sh, dw, dh, sharpenOverride) {
+      const sharp = sharpenOverride != null ? Number(sharpenOverride) : defaultSharpen;
+      if (mode === 'lanczos-gpu' || mode === 'lanczos-cas-gpu') {
+        try { return gpu.resize(source, sw, sh, dw, dh, { sharpen: sharp }); }
         catch { mode = root.KapturaLanczos ? 'lanczos-cpu' : 'fast'; } // degrade once, honestly
       }
       if (mode === 'lanczos-cpu') {

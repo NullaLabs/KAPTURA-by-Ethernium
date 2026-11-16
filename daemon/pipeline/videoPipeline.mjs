@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { detectVideoBackend, getOptimalGpuEncoderParams } from "./gpuDirectOptimizer.mjs";
-import { getCompanionStatus, resolveFontTtfPath, runUpskaletor } from "../providers/adapters.mjs";
+import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, runUpskaletor } from "../providers/adapters.mjs";
 
 const ALLOWED_INPUT_EXTS = new Set([".webm", ".mp4", ".mov", ".mkv", ".avi", ".gif", ".png", ".jpg", ".jpeg", ".webp"]);
 
@@ -224,6 +224,8 @@ export async function transcodeMediaTask({
   bitrateMbps = 0,
   targetMB = 0,
   quality = "high",
+  sharpen = 0,
+  cfr = false,
   textOverlay = "",
   startSec = 0,
   endSec = 0,
@@ -296,6 +298,11 @@ export async function transcodeMediaTask({
     } else if (width > 0) {
       filters.push(`scale=${evenDim(width)}:-2:flags=lanczos`);
     }
+    const sharpNum = Number(sharpen) || 0;
+    if (sharpNum > 0) {
+      const amt = Math.min(1.5, Math.max(0.25, sharpNum * 1.4)).toFixed(2);
+      filters.push(`unsharp=5:5:${amt}:5:5:0.0`);
+    }
     if (textOverlay) {
       const ttf = resolveFontTtfPath();
       const fontArg = ttf ? `fontfile='${ttf.replace(/\\/g, "/").replace(/:/g, "\\:")}':` : "";
@@ -307,6 +314,7 @@ export async function transcodeMediaTask({
     preArgs.push("-i", stagedInput);
     if (trimEnd > 0) preArgs.push("-t", (trimEnd - trimStart).toFixed(3));
     if (fps > 0) preArgs.push("-r", String(Math.round(fps)));
+    if (cfr) preArgs.push("-fps_mode", "cfr");
     if (filters.length > 0) preArgs.push("-vf", filters.join(","));
     if (outExt === "mp4") preArgs.push("-c:a", "aac", "-b:a", "128k");
 
@@ -719,6 +727,224 @@ export async function renderVideoTask({
       hardwareAccelerated: encRes.hardwareAccelerated,
       fallbackCpu: encRes.fallbackCpu,
       upscale: upscaleInfo,
+      providers: getCompanionStatus(),
+    };
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+const IMAGE_AI_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"]);
+
+function runProcessArgs(binPath, args, cwd) {
+  return new Promise((resolve) => {
+    const proc = spawn(binPath, args, { cwd: cwd || undefined, windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("error", (err) => resolve({ code: 1, stdout, stderr: err.message }));
+    proc.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+/**
+ * Neural super-resolution & restoration via Real-ESRGAN NCNN Vulkan (never faked if absent).
+ */
+export async function upscaleAiTask({
+  inputPath = "",
+  inputBuffer = null,
+  inputExt = ".mp4",
+  outputDir = path.resolve(process.cwd(), "exports"),
+  model = "realesr-general-x4v3",
+  scale = 4,
+  width = 0,
+  height = 0,
+  denoise = false,
+  quality = "high",
+  taskId: providedTaskId = "",
+  onProgress,
+}) {
+  if (!inputPath && !inputBuffer) {
+    return { success: false, status: "missing_input", error: "Input media path or buffer is required." };
+  }
+  if (!inputPath && inputBuffer && inputBuffer.length === 0) {
+    return { success: false, status: "empty_input", error: "Empty media buffer (0 bytes)." };
+  }
+
+  const realEsrganPath = resolveRealEsrganExecutable();
+  if (!realEsrganPath) {
+    return {
+      success: false,
+      status: "realesrgan_unavailable",
+      error: "realesrgan-ncnn-vulkan binary not detected on host (PATH / ETHERNIUM_REALESRGAN_PATH / UPSKALETOR).",
+      providers: getCompanionStatus(),
+    };
+  }
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  pruneOldExports(outputDir);
+  const taskId = providedTaskId || `ai_${Date.now()}`;
+  const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".mp4";
+  const isImage = IMAGE_AI_EXTS.has(cleanExt);
+  const workDir = path.join(outputDir, `.tmp_${taskId}`);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  try {
+    let stagedInput = inputPath ? path.resolve(inputPath) : "";
+    if (!stagedInput && inputBuffer) {
+      stagedInput = path.join(workDir, `input${cleanExt}`);
+      fs.writeFileSync(stagedInput, inputBuffer);
+    }
+    if (!stagedInput || !fs.existsSync(stagedInput)) {
+      return { success: false, status: "missing_input", error: "Input media path or buffer is required." };
+    }
+    if (fs.statSync(stagedInput).size === 0) {
+      return { success: false, status: "empty_input", error: "Input media file is empty (0 bytes)." };
+    }
+
+    const backend = detectVideoBackend();
+    const safeScale = scale === 2 || scale === 3 ? scale : 4;
+    const binDir = path.dirname(realEsrganPath);
+
+    if (isImage) {
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "NEURAL_INFER", progress: 25 });
+      const rawOut = path.join(workDir, "neural_out.png");
+      const finalOut = `${taskId}.png`;
+      const finalPath = path.join(outputDir, finalOut);
+      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-n", model, "-s", String(safeScale), "-f", "png"];
+      const res = await runProcessArgs(realEsrganPath, aiArgs, binDir);
+      if (res.code !== 0 || !fs.existsSync(rawOut)) {
+        return { success: false, status: "ai_failed", error: (res.stderr || "Real-ESRGAN image inference failed").slice(-500) };
+      }
+
+      if (width > 0 && backend.available && backend.ffmpegPath) {
+        const filters = [height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`];
+        if (denoise) filters.unshift("hqdn3d=1.2:1.2:4:4");
+        await runFfmpegArgs(backend.ffmpegPath, ["-hide_banner", "-y", "-i", rawOut, "-vf", filters.join(","), finalPath]);
+      } else {
+        fs.copyFileSync(rawOut, finalPath);
+      }
+
+      const stat = fs.statSync(finalPath);
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
+      return {
+        success: true,
+        status: "completed",
+        taskId,
+        outputFile: finalOut,
+        videoPath: finalPath,
+        sizeBytes: stat.size,
+        model,
+        neural: true,
+        hardwareAccelerated: true,
+        providers: getCompanionStatus(),
+      };
+    }
+
+    if (!backend.available || !backend.ffmpegPath) {
+      return { success: false, status: "ffmpeg_unavailable", error: "FFmpeg binary required for video neural reconstruction." };
+    }
+
+    if (typeof onProgress === "function") onProgress({ taskId, stage: "SEGMENT_PREP", progress: 8 });
+    const probedDur = Math.max(0.2, await probeDurationSec(backend.ffmpegPath, stagedInput));
+    const segDir = path.join(workDir, "segments");
+    const outSegDir = path.join(workDir, "out_segments");
+    fs.mkdirSync(segDir, { recursive: true });
+    fs.mkdirSync(outSegDir, { recursive: true });
+
+    // Segment video into 4-second chunks so frame extraction stays bounded on disk
+    const segRes = await runFfmpegArgs(backend.ffmpegPath, [
+      "-hide_banner", "-y", "-i", stagedInput,
+      "-c:v", "copy", "-an", "-f", "segment", "-segment_time", "4", "-reset_timestamps", "1",
+      path.join(segDir, "seg_%04d.mp4"),
+    ]);
+    if (segRes.code !== 0) {
+      fs.copyFileSync(stagedInput, path.join(segDir, "seg_0000.mp4"));
+    }
+    const segFiles = fs.readdirSync(segDir).filter((f) => f.endsWith(".mp4")).sort();
+    if (segFiles.length === 0) {
+      return { success: false, status: "segment_failed", error: "No video segments produced for neural pass." };
+    }
+
+    const concatList = [];
+    for (let i = 0; i < segFiles.length; i++) {
+      const segIn = path.join(segDir, segFiles[i]);
+      const framesIn = path.join(workDir, `f_in_${i}`);
+      const framesOut = path.join(workDir, `f_out_${i}`);
+      fs.mkdirSync(framesIn, { recursive: true });
+      fs.mkdirSync(framesOut, { recursive: true });
+
+      const exRes = await runFfmpegArgs(backend.ffmpegPath, [
+        "-hide_banner", "-y", "-i", segIn, path.join(framesIn, "f_%06d.png"),
+      ]);
+      if (exRes.code !== 0) {
+        return { success: false, status: "extract_failed", error: exRes.stderr.slice(-500) };
+      }
+
+      const aiRes = await runProcessArgs(realEsrganPath, [
+        "-i", framesIn, "-o", framesOut, "-n", model, "-s", String(safeScale), "-f", "png",
+      ], binDir);
+      if (aiRes.code !== 0) {
+        return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
+      }
+
+      const segOut = path.join(outSegDir, `out_${i}.mp4`);
+      const vfList = [];
+      if (denoise) vfList.push("hqdn3d=1.1:1.1:3.5:3.5");
+      if (width > 0) {
+        vfList.push(height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`);
+      }
+      const segEncArgs = [
+        "-hide_banner", "-y", "-framerate", "30", "-i", path.join(framesOut, "f_%06d.png"),
+      ];
+      if (vfList.length > 0) segEncArgs.push("-vf", vfList.join(","));
+      const segEnc = await encodeWithSafeFallback({
+        ffmpegPath: backend.ffmpegPath,
+        preArgs: segEncArgs,
+        container: "mp4",
+        bitrateMbps: 35,
+        quality,
+        outputPath: segOut,
+      });
+      if (!segEnc.ok) {
+        return { success: false, status: "encode_failed", error: segEnc.error };
+      }
+      concatList.push(`file '${segOut.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`);
+      fs.rmSync(framesIn, { recursive: true, force: true });
+      fs.rmSync(framesOut, { recursive: true, force: true });
+
+      if (typeof onProgress === "function") {
+        onProgress({ taskId, stage: "NEURAL_SEGMENT", progress: Math.min(92, Math.round(12 + ((i + 1) / segFiles.length) * 80)) });
+      }
+    }
+
+    const listPath = path.join(workDir, "concat.txt");
+    fs.writeFileSync(listPath, concatList.join("\n"));
+    const outputFile = `${taskId}.mp4`;
+    const outputPath = path.join(outputDir, outputFile);
+    const muxRes = await runFfmpegArgs(backend.ffmpegPath, [
+      "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listPath,
+      "-i", stagedInput, "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
+      outputPath,
+    ]);
+    if (muxRes.code !== 0 || !fs.existsSync(outputPath)) {
+      return { success: false, status: "mux_failed", error: muxRes.stderr.slice(-500) };
+    }
+
+    const stat = fs.statSync(outputPath);
+    if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
+    return {
+      success: true,
+      status: "completed",
+      taskId,
+      outputFile,
+      videoPath: outputPath,
+      sizeBytes: stat.size,
+      duration: probedDur,
+      model,
+      neural: true,
+      hardwareAccelerated: true,
       providers: getCompanionStatus(),
     };
   } finally {

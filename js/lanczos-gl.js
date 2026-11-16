@@ -53,6 +53,29 @@
       gl_FragColor = wsum > 0.0 ? acc / wsum : texture2D(uTex, vUv);
     }`;
 
+  // Contrast Adaptive Sharpening (CAS 5-tap edge recovery without halos)
+  const CAS_FRAG = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTex;
+    uniform vec2 uTexel;
+    uniform float uSharp;
+    float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+    void main() {
+      vec4 center = texture2D(uTex, vUv);
+      vec3 c = center.rgb;
+      vec3 n = texture2D(uTex, vUv + vec2(0.0, -uTexel.y)).rgb;
+      vec3 s = texture2D(uTex, vUv + vec2(0.0,  uTexel.y)).rgb;
+      vec3 e = texture2D(uTex, vUv + vec2( uTexel.x, 0.0)).rgb;
+      vec3 w = texture2D(uTex, vUv + vec2(-uTexel.x, 0.0)).rgb;
+      float minL = min(luma(c), min(min(luma(n), luma(s)), min(luma(e), luma(w))));
+      float maxL = max(luma(c), max(max(luma(n), luma(s)), max(luma(e), luma(w))));
+      float amp = clamp(min(minL, 1.0 - maxL) / max(maxL, 1e-4), 0.0, 1.0);
+      float weight = -0.16 * uSharp * sqrt(amp);
+      vec3 outCol = clamp((c + (n + s + e + w) * weight) / (1.0 + 4.0 * weight), 0.0, 1.0);
+      gl_FragColor = vec4(outCol, center.a);
+    }`;
+
   function compile(gl, type, src) {
     const sh = gl.createShader(type);
     gl.shaderSource(sh, src);
@@ -88,15 +111,22 @@
     } catch { gl = null; }
     if (!gl) return null;
 
-    let program, quad, srcTex, midTex, fbo, ready = false;
+    let program, casProgram, quad, srcTex, midTex, postTex, fbo, ready = false;
     try {
       const vs = compile(gl, gl.VERTEX_SHADER, VERT);
       const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG);
+      const casFs = compile(gl, gl.FRAGMENT_SHADER, CAS_FRAG);
       program = gl.createProgram();
       gl.attachShader(program, vs); gl.attachShader(program, fs);
       gl.linkProgram(program);
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-      gl.deleteShader(vs); gl.deleteShader(fs);
+
+      casProgram = gl.createProgram();
+      gl.attachShader(casProgram, vs); gl.attachShader(casProgram, casFs);
+      gl.linkProgram(casProgram);
+      if (!gl.getProgramParameter(casProgram, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(casProgram));
+
+      gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteShader(casFs);
 
       quad = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -104,6 +134,7 @@
 
       srcTex = makeTexture(gl);
       midTex = makeTexture(gl);
+      postTex = makeTexture(gl);
       fbo = gl.createFramebuffer();
       ready = true;
     } catch (e) {
@@ -116,7 +147,13 @@
       filter: gl.getUniformLocation(program, 'uFilter'),
       axis: gl.getUniformLocation(program, 'uAxis'),
     };
+    const casUni = {
+      tex: gl.getUniformLocation(casProgram, 'uTex'),
+      texel: gl.getUniformLocation(casProgram, 'uTexel'),
+      sharp: gl.getUniformLocation(casProgram, 'uSharp'),
+    };
     const aPos = gl.getAttribLocation(program, 'aPos');
+    const aCasPos = gl.getAttribLocation(casProgram, 'aPos');
 
     function drawPass(inputTex, targetTex, w, h, srcLen, filter, axis) {
       if (targetTex) {
@@ -141,24 +178,42 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
+    function drawCasPass(inputTex, w, h, sharpAmt) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+      gl.useProgram(casProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.enableVertexAttribArray(aCasPos);
+      gl.vertexAttribPointer(aCasPos, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, inputTex);
+      gl.uniform1i(casUni.tex, 0);
+      gl.uniform2f(casUni.texel, 1 / Math.max(1, w), 1 / Math.max(1, h));
+      gl.uniform1f(casUni.sharp, sharpAmt);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
     /**
      * Resize `source` (video / canvas / ImageBitmap) to dw x dh on the GPU.
-     * Returns the output canvas (reused each call).
+     * Optional `opts.sharpen` (0..1) runs a Contrast Adaptive Sharpening recovery pass.
      */
-    function resize(source, sw, sh, dw, dh) {
+    function resize(source, sw, sh, dw, dh, opts) {
+      const sharp = opts && Number(opts.sharpen) > 0 ? Math.min(1, Number(opts.sharpen)) : 0;
       out.width = dw; out.height = dh;
-      // upload source (true = upright orientation matching 2D canvas)
       gl.bindTexture(gl.TEXTURE_2D, srcTex);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
 
-      const fx = dw < sw ? sw / dw : 1;   // widen kernel when downscaling
+      const fx = dw < sw ? sw / dw : 1;
       const fy = dh < sh ? sh / dh : 1;
 
-      // pass 1: horizontal  src(sw x sh) -> mid(dw x sh)
       drawPass(srcTex, midTex, dw, sh, sw, fx, [1, 0]);
-      // pass 2: vertical    mid(dw x sh) -> screen(dw x dh)
-      drawPass(midTex, null, dw, dh, sh, fy, [0, 1]);
+      if (sharp > 0) {
+        drawPass(midTex, postTex, dw, dh, sh, fy, [0, 1]);
+        drawCasPass(postTex, dw, dh, sharp);
+      } else {
+        drawPass(midTex, null, dw, dh, sh, fy, [0, 1]);
+      }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return out;
     }
@@ -166,14 +221,16 @@
     function dispose() {
       if (!ready) return;
       gl.deleteProgram(program);
+      gl.deleteProgram(casProgram);
       gl.deleteBuffer(quad);
       gl.deleteTexture(srcTex);
       gl.deleteTexture(midTex);
+      gl.deleteTexture(postTex);
       gl.deleteFramebuffer(fbo);
       ready = false;
     }
 
-    return { canvas: out, gl, resize, dispose, renderer: 'webgl' };
+    return { canvas: out, gl, resize, dispose, renderer: 'webgl-cas' };
   }
 
   const api = { create };

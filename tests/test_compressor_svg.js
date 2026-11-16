@@ -57,12 +57,19 @@ check('vectorTrace total paths count is positive', trace.totalPaths > 0);
 
 console.log('\n--- UPSKALETOR IMAGE & VIDEO SUPPORT ---');
 check('Upskaletor supports image files', Upskaletor.isImageFile('render.png') === true);
+check('Upskaletor has 2k_cas profile', Boolean(Upskaletor.PROFILES['2k_cas']) && Upskaletor.PROFILES['2k_cas'].sharpen > 0 && Upskaletor.PROFILES['2k_cas'].cfr === true);
+check('Upskaletor has 4k_cas profile', Boolean(Upskaletor.PROFILES['4k_cas']) && Upskaletor.PROFILES['4k_cas'].w === 3840);
+check('Upskaletor has restore_ai profile', Boolean(Upskaletor.PROFILES['restore_ai']) && Upskaletor.PROFILES['restore_ai'].denoise === true);
+check('Upskaletor has anime_ai profile', Boolean(Upskaletor.PROFILES['anime_ai']) && Upskaletor.PROFILES['anime_ai'].model === 'realesrgan-x4plus-anime');
 check('Upskaletor has 2x_super profile', Boolean(Upskaletor.PROFILES['2x_super']));
 check('Upskaletor has 4x_super profile', Boolean(Upskaletor.PROFILES['4x_super']));
 const imgCmd = Upskaletor.command('art.png', '4k_ai', 'ai');
 check('Upskaletor image handoff command targets .png', imgCmd.includes('.png') && imgCmd.includes('_UPSKALED.png'));
+check('Upskaletor command aligns with kpr-upscale.ps1 flags', imgCmd.includes('kpr-upscale.ps1') && imgCmd.includes('-Mode AI') && imgCmd.includes('-Model "realesr-general-x4v3"') && imgCmd.includes('-OutputFile'));
 const vidCmd = Upskaletor.command('clip.mp4', '4k_ai', 'ai');
 check('Upskaletor video handoff command targets .mp4', vidCmd.includes('.mp4') && vidCmd.includes('_UPSKALED.mp4'));
+const casCmd = Upskaletor.command('clip.mp4', '2k_cas', 'auto');
+check('Upskaletor 2k_cas command emits Lanczos 2560x1440', casCmd.includes('-Mode Lanczos') && casCmd.includes('-Width 2560') && casCmd.includes('-Height 1440'));
 
 if (failures) {
   console.error(`\nTESTS FAILED (${failures})`);

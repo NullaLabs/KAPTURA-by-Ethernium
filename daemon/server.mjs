@@ -10,7 +10,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderVideoTask, transcodeMediaTask, trimMediaTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
+import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
 import { detectVideoBackend } from "./pipeline/gpuDirectOptimizer.mjs";
 import { getCompanionStatus } from "./providers/adapters.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "./synkronia/ebwpProtocol.mjs";
@@ -116,6 +116,7 @@ export function createKapturaDaemon({
         ffmpegAvailable: backend.available,
         preferredCodec: backend.preferredCodec,
         hardwareAccelerated: backend.hardwareAccelerated,
+        neuralAvailable: Boolean(providers.realEsrgan),
         encoders: backend.encoders,
       },
       streaming: {
@@ -123,11 +124,13 @@ export function createKapturaDaemon({
         sseEvents: "/events",
         rangeSupported: true,
         trimEndpoint: "/trim",
+        upscaleAiEndpoint: "/upscale-ai",
       },
       providers: {
         etherniumVox: providers.etherniumVox,
         fontForge: providers.fontForge,
         upskalator: providers.upskalator,
+        realEsrgan: Boolean(providers.realEsrgan),
       },
       hlc: hlcEngine.now(),
     };
@@ -328,6 +331,9 @@ export function createKapturaDaemon({
         const bitrateMbps = Number(h["x-kaptura-bitrate"] || url.searchParams.get("bitrate") || 0);
         const targetMB = Number(h["x-kaptura-target-mb"] || url.searchParams.get("targetMB") || 0);
         const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
+        const sharpen = Number(h["x-kaptura-sharpen"] || url.searchParams.get("sharpen") || 0);
+        const cfrHeader = String(h["x-kaptura-cfr"] || url.searchParams.get("cfr") || "").toLowerCase();
+        const cfr = cfrHeader === "1" || cfrHeader === "true";
         const startSec = Number(h["x-kaptura-start-sec"] || url.searchParams.get("startSec") || 0);
         const endSec = Number(h["x-kaptura-end-sec"] || url.searchParams.get("endSec") || 0);
         const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
@@ -344,6 +350,8 @@ export function createKapturaDaemon({
           bitrateMbps,
           targetMB,
           quality,
+          sharpen,
+          cfr,
           startSec,
           endSec,
           taskId,
@@ -361,6 +369,73 @@ export function createKapturaDaemon({
             "Content-Disposition": `attachment; filename="${result.outputFile}"`,
             "X-Kaptura-Codec": result.codec || "",
             "X-Kaptura-HW": String(Boolean(result.hardwareAccelerated)),
+          });
+          const fileStream = fs.createReadStream(result.videoPath);
+          fileStream.once("close", () => {
+            try { if (fs.existsSync(result.videoPath)) fs.unlinkSync(result.videoPath); } catch {}
+          });
+          return fileStream.pipe(res);
+        }
+        return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
+      } catch (err) {
+        return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/upscale-ai") {
+      try {
+        const h = req.headers;
+        const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        let inputPath = "";
+        let raw = null;
+        if (sourceExport) {
+          const resolved = resolveExportRef(sourceExport);
+          if (!resolved) {
+            return sendJson(res, 404, { success: false, status: "missing_input", error: "Referenced export artifact not found." });
+          }
+          inputPath = resolved;
+        } else {
+          raw = await readRequestBody(req);
+          if (!raw.length) {
+            return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+          }
+        }
+        const inputExt = inputPath
+          ? (path.extname(inputPath).toLowerCase() || ".mp4")
+          : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".mp4");
+        const model = String(h["x-kaptura-ai-model"] || url.searchParams.get("model") || "realesr-general-x4v3");
+        const scale = Number(h["x-kaptura-scale"] || url.searchParams.get("scale") || 4);
+        const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
+        const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);
+        const denoise = String(h["x-kaptura-denoise"] || url.searchParams.get("denoise") || "").toLowerCase() === "true";
+        const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
+        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
+
+        const result = await upscaleAiTask({
+          inputPath,
+          inputBuffer: raw,
+          inputExt,
+          outputDir: exportsDir,
+          model,
+          scale,
+          width,
+          height,
+          denoise,
+          quality,
+          taskId,
+          onProgress: emitProgressEvent,
+        });
+
+        if (!result.success) {
+          const code = result.status === "empty_input" || result.status === "missing_input" ? 400 : 422;
+          return sendJson(res, code, result);
+        }
+        if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
+          const ext = path.extname(result.outputFile).toLowerCase();
+          res.writeHead(200, {
+            "Content-Type": MIME_MAP[ext] || "video/mp4",
+            "Content-Disposition": `attachment; filename="${result.outputFile}"`,
+            "X-Kaptura-Model": result.model || model,
           });
           const fileStream = fs.createReadStream(result.videoPath);
           fileStream.once("close", () => {
