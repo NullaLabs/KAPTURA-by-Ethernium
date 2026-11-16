@@ -913,7 +913,14 @@
     if ($('upskaletorCompareBox')) $('upskaletorCompareBox').style.display = 'none';
 
     try {
-      const fileObj = activeSrc.remoteUrl && profile !== '4k_ai' && engine !== 'ai' && window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode()
+      const profileObj = (window.KapturaUpskaletor.PROFILES && window.KapturaUpskaletor.PROFILES[profile]) || {};
+      const canPassRemote = Boolean(
+        activeSrc.remoteUrl &&
+        window.KapturaDaemon &&
+        window.KapturaDaemon.isReadyForTranscode() &&
+        (!profileObj.ai || (typeof window.KapturaDaemon.isNeuralAvailable === 'function' && window.KapturaDaemon.isNeuralAvailable()))
+      );
+      const fileObj = canPassRemote
         ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
         : await ensureRealFile(activeSrc);
 

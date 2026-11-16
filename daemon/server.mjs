@@ -403,7 +403,7 @@ export function createKapturaDaemon({
         const inputExt = inputPath
           ? (path.extname(inputPath).toLowerCase() || ".mp4")
           : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".mp4");
-        const model = String(h["x-kaptura-ai-model"] || url.searchParams.get("model") || "realesr-general-x4v3");
+        const model = String(h["x-kaptura-ai-model"] || url.searchParams.get("model") || "realesrgan-x4plus");
         const scale = Number(h["x-kaptura-scale"] || url.searchParams.get("scale") || 4);
         const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
         const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);

@@ -23,9 +23,9 @@
   const PROFILES = {
     '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', ai: false, w: 2560, h: 1440, sharpen: 0.65, cfr: true, bitrate: 24 },
     '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', ai: false, w: 3840, h: 2160, sharpen: 0.72, cfr: true, bitrate: 45 },
-    '4k_ai':          { label: '4K UHD · Real-ESRGAN General (Neural)', ai: true,  w: 3840, h: 2160, model: 'realesr-general-x4v3', scale: 4 },
-    'restore_ai':     { label: 'Restauración Neural · General + Denoise', ai: true, w: 3840, h: 2160, model: 'realesr-general-x4v3', scale: 4, denoise: true },
-    'anime_ai':       { label: 'Anime 4K · Real-ESRGAN x4plus-anime', ai: true, w: 3840, h: 2160, model: 'realesrgan-x4plus-anime', scale: 4 },
+    '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', ai: true,  w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
+    'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', ai: true, w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
+    'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', ai: true, w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
     '4k_lanczos':     { label: '4K UHD · Lanczos-3 (in-browser)', ai: false, w: 3840, h: 2160, bitrate: 40 },
     '1080p_lanczos':  { label: '1080p · Lanczos-3 (in-browser)', ai: false, w: 1920, h: 1080, bitrate: 16 },
     '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 2, sharpen: 0.35 },
@@ -44,7 +44,7 @@
     const w = p.w || (p.scale ? p.scale * 1920 : 3840);
     const h = p.h || (p.scale ? p.scale * 1080 : 2160);
     const encFlag = engine === 'cpu' ? 'libx264' : 'Auto';
-    const modelArg = mode === 'AI' ? ` -Model "${p.model || 'realesr-general-x4v3'}"` : '';
+    const modelArg = mode === 'AI' ? ` -Model "${p.model || 'realesrgan-x4plus'}"` : '';
     return `.\\kpr-upscale.ps1 -InputFile ".\\${fileName}" -Mode ${mode}${modelArg} -Width ${w} -Height ${h} -Encoder ${encFlag} -OutputFile ".\\${baseName(fileName)}_UPSKALED.${outExt}"`;
   }
 
@@ -87,7 +87,7 @@
       if (!opts.forceHandoff && root.KapturaDaemon && typeof root.KapturaDaemon.isNeuralAvailable === 'function' && root.KapturaDaemon.isNeuralAvailable()) {
         try {
           const aiRes = await root.KapturaDaemon.upscaleAiViaDaemon(file, {
-            model: profile.model || 'realesr-general-x4v3',
+            model: profile.model || 'realesrgan-x4plus',
             scale: profile.scale || 4,
             width: profile.w || 0,
             height: profile.h || 0,

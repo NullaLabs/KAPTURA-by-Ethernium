@@ -394,7 +394,7 @@
     const isImg = /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test((file && file.name) || sourceExport) || (file && file.type && file.type.startsWith('image/'));
     const headers = {
       'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
-      'X-Kaptura-Ai-Model': opts.model || 'realesr-general-x4v3',
+      'X-Kaptura-Ai-Model': opts.model || 'realesrgan-x4plus',
       'X-Kaptura-Scale': String(opts.scale || 4),
       'X-Kaptura-Quality': opts.quality || 'high',
       'X-Kaptura-Task-Id': taskId,
@@ -427,8 +427,8 @@
         ext,
         width: opts.width || 0,
         height: opts.height || 0,
-        model: res.headers.get('X-Kaptura-Model') || opts.model || 'realesr-general-x4v3',
-        scaleMode: `Real-ESRGAN (${opts.model || 'realesr-general-x4v3'})`,
+        model: res.headers.get('X-Kaptura-Model') || opts.model || 'realesrgan-x4plus',
+        scaleMode: `Real-ESRGAN (${res.headers.get('X-Kaptura-Model') || opts.model || 'realesrgan-x4plus'})`,
         neural: true,
         fellBack: false,
         viaDaemon: true,

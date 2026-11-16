@@ -156,13 +156,34 @@ async function run() {
           port,
           "/upscale-ai",
           "POST",
-          { "X-Kaptura-Ext": ".mp4", "X-Kaptura-Ai-Model": "realesr-general-x4v3" },
+          { "X-Kaptura-Ext": ".mp4", "X-Kaptura-Ai-Model": "realesrgan-x4plus" },
           srcBuf
         );
         assert.equal(aiGuardRes.status, 422, "POST /upscale-ai must return 422 when realesrgan-ncnn-vulkan is absent");
         const aiGuardJson = JSON.parse(aiGuardRes.body.toString("utf8"));
         assert.equal(aiGuardJson.success, false);
         assert.equal(aiGuardJson.status, "realesrgan_unavailable");
+      } else {
+        // Test live Real-ESRGAN Vulkan image reconstruction using minimal valid 4x4 RGBA PNG
+        const tinyPng = Buffer.from(
+          "89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e0000001849444154789c6360f8cf800f308164308c901188240300a7fd03fc21f13d8f0000000049454e44ae426082",
+          "hex"
+        );
+        const aiOkRes = await httpRequest(
+          port,
+          "/upscale-ai?download=1",
+          "POST",
+          {
+            "Accept": "application/octet-stream",
+            "X-Kaptura-Ext": ".png",
+            "X-Kaptura-Ai-Model": "realesr-animevideov3",
+            "X-Kaptura-Scale": "4",
+          },
+          tinyPng
+        );
+        assert.equal(aiOkRes.status, 200, "POST /upscale-ai must succeed with real PNG output when neuralAvailable is true");
+        assert.equal(aiOkRes.body.subarray(0, 4).toString("hex"), "89504e47", "Neural output must be a valid PNG");
+        assert.ok(aiOkRes.body.length > tinyPng.length, "4x neural output PNG must be larger than 4x4 input PNG");
       }
 
       // Test WebSocket /ws/capture streaming pipe-media mode

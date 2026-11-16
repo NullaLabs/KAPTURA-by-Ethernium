@@ -97,12 +97,22 @@ function runFfmpegArgs(ffmpegPath, args, options = {}) {
   });
 }
 
-/** Probe media duration in seconds using FFmpeg banner stderr (requires no separate ffprobe). */
+/** Probe media duration (sec) and frame rate using FFmpeg banner stderr. */
 async function probeDurationSec(ffmpegPath, inputPath) {
   const res = await runFfmpegArgs(ffmpegPath, ["-hide_banner", "-i", inputPath]);
   const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(res.stderr);
   if (!m) return 0;
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+}
+
+async function probeMediaMeta(ffmpegPath, inputPath) {
+  const res = await runFfmpegArgs(ffmpegPath, ["-hide_banner", "-i", inputPath]);
+  const durM = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(res.stderr);
+  const fpsM = /,\s*(\d+(?:\.\d+)?)\s*(?:fps|tbr)\b/.exec(res.stderr);
+  const duration = durM ? (Number(durM[1]) * 3600 + Number(durM[2]) * 60 + Number(durM[3])) : 0;
+  const rawFps = fpsM ? Number(fpsM[1]) : 30;
+  const fps = Number.isFinite(rawFps) && rawFps >= 5 && rawFps <= 120 ? rawFps : 30;
+  return { duration, fps };
 }
 
 function escapeDrawtext(text) {
@@ -748,6 +758,20 @@ function runProcessArgs(binPath, args, cwd) {
   });
 }
 
+function resolveNeuralModelName(requestedModel, modelsDir, scale) {
+  const safeScale = scale === 2 || scale === 3 ? scale : 4;
+  const candidate = String(requestedModel || "realesrgan-x4plus").trim();
+  const hasModel = (name) =>
+    fs.existsSync(path.join(modelsDir, `${name}.param`)) ||
+    fs.existsSync(path.join(modelsDir, `${name}-x${safeScale}.param`));
+
+  if (hasModel(candidate)) return candidate;
+  if (candidate === "realesr-general-x4v3" && hasModel("realesrgan-x4plus")) return "realesrgan-x4plus";
+  if (hasModel("realesrgan-x4plus")) return "realesrgan-x4plus";
+  if (hasModel("realesr-animevideov3")) return "realesr-animevideov3";
+  return candidate;
+}
+
 /**
  * Neural super-resolution & restoration via Real-ESRGAN NCNN Vulkan (never faked if absent).
  */
@@ -756,7 +780,7 @@ export async function upscaleAiTask({
   inputBuffer = null,
   inputExt = ".mp4",
   outputDir = path.resolve(process.cwd(), "exports"),
-  model = "realesr-general-x4v3",
+  model = "realesrgan-x4plus",
   scale = 4,
   width = 0,
   height = 0,
@@ -806,13 +830,15 @@ export async function upscaleAiTask({
     const backend = detectVideoBackend();
     const safeScale = scale === 2 || scale === 3 ? scale : 4;
     const binDir = path.dirname(realEsrganPath);
+    const modelsDir = path.join(binDir, "models");
+    const activeModel = resolveNeuralModelName(model, modelsDir, safeScale);
 
     if (isImage) {
       if (typeof onProgress === "function") onProgress({ taskId, stage: "NEURAL_INFER", progress: 25 });
       const rawOut = path.join(workDir, "neural_out.png");
       const finalOut = `${taskId}.png`;
       const finalPath = path.join(outputDir, finalOut);
-      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-n", model, "-s", String(safeScale), "-f", "png"];
+      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png"];
       const res = await runProcessArgs(realEsrganPath, aiArgs, binDir);
       if (res.code !== 0 || !fs.existsSync(rawOut)) {
         return { success: false, status: "ai_failed", error: (res.stderr || "Real-ESRGAN image inference failed").slice(-500) };
@@ -835,7 +861,7 @@ export async function upscaleAiTask({
         outputFile: finalOut,
         videoPath: finalPath,
         sizeBytes: stat.size,
-        model,
+        model: activeModel,
         neural: true,
         hardwareAccelerated: true,
         providers: getCompanionStatus(),
@@ -847,7 +873,9 @@ export async function upscaleAiTask({
     }
 
     if (typeof onProgress === "function") onProgress({ taskId, stage: "SEGMENT_PREP", progress: 8 });
-    const probedDur = Math.max(0.2, await probeDurationSec(backend.ffmpegPath, stagedInput));
+    const mediaMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    const probedDur = Math.max(0.2, mediaMeta.duration);
+    const sourceFps = mediaMeta.fps || 30;
     const segDir = path.join(workDir, "segments");
     const outSegDir = path.join(workDir, "out_segments");
     fs.mkdirSync(segDir, { recursive: true });
@@ -883,7 +911,7 @@ export async function upscaleAiTask({
       }
 
       const aiRes = await runProcessArgs(realEsrganPath, [
-        "-i", framesIn, "-o", framesOut, "-n", model, "-s", String(safeScale), "-f", "png",
+        "-i", framesIn, "-o", framesOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png",
       ], binDir);
       if (aiRes.code !== 0) {
         return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
@@ -896,7 +924,7 @@ export async function upscaleAiTask({
         vfList.push(height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`);
       }
       const segEncArgs = [
-        "-hide_banner", "-y", "-framerate", "30", "-i", path.join(framesOut, "f_%06d.png"),
+        "-hide_banner", "-y", "-framerate", String(sourceFps), "-i", path.join(framesOut, "f_%06d.png"),
       ];
       if (vfList.length > 0) segEncArgs.push("-vf", vfList.join(","));
       const segEnc = await encodeWithSafeFallback({
@@ -942,7 +970,7 @@ export async function upscaleAiTask({
       videoPath: outputPath,
       sizeBytes: stat.size,
       duration: probedDur,
-      model,
+      model: activeModel,
       neural: true,
       hardwareAccelerated: true,
       providers: getCompanionStatus(),
