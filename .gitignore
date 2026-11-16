@@ -2,7 +2,10 @@
 *.webm
 *.png
 *.jpg
+*.log
+*.tmp
 concat_list.txt
+dist/
 exports/
 node_modules/
 __pycache__/

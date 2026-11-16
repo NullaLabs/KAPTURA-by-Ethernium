@@ -4,21 +4,25 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
+import os from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+
+const appDataBase = process.env.LOCALAPPDATA || join(os.homedir(), ".local", "share");
+const etherniumHome = join(appDataBase, "Ethernium");
 
 const PROVIDER_DEFS = {
   upskalator: {
     envKey: "ETHERNIUM_UPSKALETOR_PATH",
-    candidates: ["E:\\UPSKALETOR", "D:\\UPSKALETOR"],
+    candidates: [join(etherniumHome, "UPSKALETOR"), join(os.homedir(), "UPSKALETOR")],
   },
   fontForge: {
     envKey: "ETHERNIUM_FONT_FORGE_PATH",
-    candidates: ["E:\\font forge by ethernium 2", "E:\\FONTS FORGE", "D:\\FONTS FORGE"],
+    candidates: [join(etherniumHome, "FontForge"), join(os.homedir(), "FontForge")],
   },
   etherniumVox: {
     envKey: "ETHERNIUM_VOX_PATH",
-    candidates: ["E:\\ETHERNIUM VOX MODELS", "E:\\ETHERNIUM VOX", "D:\\ETHERNIUM VOX"],
+    candidates: [join(etherniumHome, "VOX"), join(os.homedir(), "VOX")],
   },
 };
 

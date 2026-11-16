@@ -50,20 +50,27 @@ Sin monolitos. Cada módulo tiene una única responsabilidad y funciona en
 navegador (y varios también en Node para los tests):
 
 ```
+daemon/
+  server.mjs                   estudio + microservicio local :3370 (HTTP, SSE /events, WS /ws/capture, Range 206)
+  pipeline/videoPipeline.mjs   FFmpeg NVENC/AMF/x264 transcode, trim sin pérdida, streaming a disco y render
+  synkronia/wsServer.mjs       servidor WebSocket RFC 6455 sin dependencias externas
 js/
-  capabilities.js   detección de GPU/códecs/workers
+  audio-mixer.js    mezclador Web Audio (sistema + micrófono + vúmetros RMS)
+  capabilities.js   detección de GPU/códecs/workers/WebCodecs
+  comparator.js     comparador visual dividido Antes/Después para vídeo e imagen
   gif-encoder.js    codificador GIF89a puro (median-cut + LZW + delta frugal)
   lanczos.js        resampler Lanczos-3 en CPU
   lanczos-gl.js     resampler Lanczos-3 en GPU (WebGL, 2-pass)
   scaler.js         fachada híbrida GPU/CPU/nativo
-  transcoder.js     re-encode real + toGIF con presupuesto adaptativo (< 15 MB)
-  compressor.js     compresor inteligente de imagen y vídeo (presupuestos < 15MB, < 8MB, < 2MB)
+  transcoder.js     re-encode real (WebCodecs VP8 rápido / MediaRecorder) + toGIF con recorte
+  compressor.js     compresor inteligente con estimador de presupuesto (< 15MB, < 8MB, < 2MB)
   svg-vector.js     vectorizador de imagen a <path> SVG real y SMIL flip-book para vídeo/canvas
   gif.worker.js     encode GIF fuera del hilo principal
   upskaletor.js     upscale Lanczos real (imagen y vídeo) / handoff honesto de IA
-  vault.js          capa IndexedDB (con manejo de cuota)
-  capture.js        escenas canvas + captura de pantalla + grabación
-  app.js            orquestación de UI (toasts, progreso, sin lógica de motor)
+  vault.js          capa IndexedDB local-first y referencias ligeras a disco
+  capture.js        captura de pantalla + escenas benchmark + streaming WebSocket
+  daemon-bridge.js  puente cliente a daemon :3370 (SSE, Trim, WebSocket)
+  app.js            orquestación de Stage, Trim Dock y flujo en 1 clic
 css/  hud.css · fonts.css
 fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 ```
@@ -81,31 +88,25 @@ fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 
 ## 🚀 Uso rápido
 
-1. Sirve la carpeta (por los módulos y el worker): `python -m http.server` y abre
-   `http://localhost:8000/` en Chrome, Edge o Brave. *(Abrir el `index.html` con
-   `file://` puede bloquear el Web Worker del GIF; en ese caso cae al hilo
-   principal automáticamente.)*
-2. **🌐 SELECT SOURCE** para elegir pantalla/pestaña, o usa un motor Canvas.
-3. Ajusta resolución, FPS, bitrate y formato.
-4. **🔴 START RECORDING** → **⏹️ STOP & SAVE MASTER** (se descarga y se guarda en la Bóveda).
-5. **🗜️ COMPRESOR**: comprime imágenes o vídeos a límites estrictos (< 15 MB Discord, < 8 MB, < 2 MB).
-6. **🌀 SVG VECTOR**: vectoriza imágenes a trazados `<path>` puros o exporta secuencias animadas SMIL.
-7. **⚡ V-CONVERTER**: arrastra un vídeo y transcodifícalo de verdad (MP4/WebM/GIF).
-8. **◆ UPSKALETOR**: reescala imágenes (PNG) y vídeos con Lanczos-3 a 4K UHD; el perfil IA hace handoff.
+1. **Con GPU Daemon local (recomendado):** ejecuta `npm run daemon` (o `KAPTURA.cmd` en Windows) y abre `http://127.0.0.1:3370/`.
+2. **Solo navegador estático:** `python -m http.server` (o `npm run serve`) y abre `http://localhost:8000/`. *(Abrir `index.html` vía `file://` puede limitar Web Workers.)*
+3. Usa **🖥️ Grabar Pantalla / Ventana** o **📂 Abrir Vídeo en Stage**, ajusta audio del sistema/micrófono y graba.
+4. Al detener o abrir un vídeo, reprodúcelo y recórtalo en el propio Stage (**✂️ TRIM FAST**) o envíalo en 1 clic a **Cinema GIF**, **Compresor**, **V-Converter** o **Upskaletor**.
 
-## ⚡ Modo Dual Híbrido v2.0 (Browser + GPU Daemon `:3370`)
+## ⚡ Modo Dual Híbrido v3.0 (Browser + GPU Daemon `:3370`)
 
-KAPTURA v2.0 unifica el estudio estático de navegador con el microservicio local **`daemon/server.mjs` (`127.0.0.1:3370`)**:
-- **Sin servidor (GitHub Pages / estático):** todo funciona 100% en navegador (`MediaRecorder`, Lanczos CPU/WebGL, GIF89a, SVG Vector, Bóveda IndexedDB).
-- **Con daemon local (`npm run daemon` o `KAPTURA.cmd`):** descubre `ffmpeg` y codificadores reales por hardware (`h264_nvenc` / `h264_amf` / `h264_qsv` / fallback `libx264`), ejecuta transcodificación real y compresión por presupuesto (`/transcode`, `/render`) y emite telemetría **EBWP 32-byte + HLC** (`/health`, `/status`, `/telemetry/ebwp`). Si `ffmpeg` no está presente, la interfaz lo reporta sin simular resultados.
+KAPTURA v3.0 unifica el estudio estático de navegador con el microservicio local **`daemon/server.mjs` (`127.0.0.1:3370`)**:
+- **Sin servidor (GitHub Pages / estático):** 100% en navegador (`MediaRecorder`, `WebCodecs` VP8 acelerado para WebM, Lanczos CPU/WebGL, GIF89a, SVG Vector, Bóveda IndexedDB y comparador A/B).
+- **Con daemon local (`npm run daemon` o `KAPTURA.cmd`):** descubre `ffmpeg` y códecs por hardware (`h264_nvenc` / `h264_amf` / `h264_qsv` / fallback `libx264`), captura directa a disco por WebSocket (`/ws/capture`) sin límite de RAM, recorte rápido (`/trim`), progreso frame a frame vía SSE (`/events`), `HTTP Range 206` en `/exports/*` y telemetría **EBWP 32-byte + HLC** (`/health`, `/status`, `/telemetry/ebwp`). Si `ffmpeg` no está presente, la interfaz lo reporta sin simular resultados.
 
 ## 🧪 Tests
 
 ```bash
 npm run daemon                     # inicia Studio + GPU Daemon en http://127.0.0.1:3370
-npm test                           # ejecuta la suite completa de tests (incluye daemon & EBWP)
+npm test                           # suite completa de tests (incluye daemon, WS, SSE, Range y EBWP)
 python tests/validate_kaptura.py   # contrato estático del producto
+python scripts/build_release.py    # genera paquete portátil limpio en dist/
 ```
 
 ---
-<sub>Built with sovereignty by Ethernium Sovereign Agent Architecture — Nulla-Labs // Nemeth Corp.</sub>
+<sub>KAPTURA by Ethernium — Local-First Capture & Transcoding Studio.</sub>

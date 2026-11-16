@@ -1,9 +1,9 @@
 @echo off
-title KAPTURA v2.0 :: Ethernium Sovereign Studio + GPU Daemon (:3370)
+title KAPTURA v3.0 :: Ethernium Sovereign Studio + GPU Daemon (:3370)
 cd /d "%~dp0"
 
 echo ========================================================================
-echo    KAPTURA v2.0 :: Sovereign Capture Studio + GPU Daemon (:3370)
+echo    KAPTURA v3.0 :: Sovereign Capture Studio + GPU Daemon (:3370)
 echo ========================================================================
 echo.
 

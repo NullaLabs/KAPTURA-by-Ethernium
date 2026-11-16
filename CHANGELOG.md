@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.0
+
+- adds disk-backed live streaming capture over zero-dependency WebSocket (`ws://127.0.0.1:3370/ws/capture`, `pipe-media` + `pipe-frames` MJPEG self-healing fallback);
+- streams real-time FFmpeg `-progress pipe:1` events over SSE (`GET /events`), adds `HTTP Range` (`206 Partial Content`) on `/exports/*`, and adds lossless stream-copy trimming (`POST /trim`);
+- introduces `js/audio-mixer.js` for mixed system + microphone capture with live VU telemetry;
+- accelerates offline browser WebM transcoding via WebCodecs `VideoEncoder` + minimal EBML muxer (`js/transcoder.js`);
+- upgrades Stage workflow with continuous playback, Start/End trim dock, 1-click tab handoff, live Compressor budget estimator, and A/B split-screen comparator (`js/comparator.js`);
+- removes internal catalog slides and stale metadata archives from the public repository.
+
 ## 2.0.0
 
 - unifies the browser CHRONO Studio with the local GPU/FFmpeg `:3370` daemon (`daemon/server.mjs`) supporting `h264_nvenc`, `libx264`, and `libvpx-vp9` hardware/software encoding;

@@ -11,7 +11,6 @@ PACKAGE_FILES = (
     "KAPTURA.cmd",
     "index.html",
     "package.json",
-    "PROJECT_METADATA.json",
     "README.md",
     "UPSKALETOR-HANDOFF.md",
     "CHANGELOG.md",
@@ -26,8 +25,6 @@ PACKAGE_DIRS = (
     "fonts",
     "js",
     "daemon",
-    "badges",
-    "docs",
 )
 
 
