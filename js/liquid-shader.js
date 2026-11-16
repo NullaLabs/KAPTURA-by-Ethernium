@@ -213,16 +213,69 @@
     }, { passive: true });
   }
 
+  function buildChamferPath(W, H, R, cut, s) {
+    const r = Math.min(R, Math.floor(W * 0.12), Math.floor(H * 0.25));
+    const c = Math.min(cut, Math.floor(W * 0.16), Math.floor(H * 0.35));
+    const f = Math.min(s, Math.floor(c * 0.34));
+    const dx = Number((f * 0.7071).toFixed(2));
+    return [
+      `M ${r},0`,
+      `L ${W - c - f},0`,
+      `Q ${W - c},0 ${Number((W - c + dx).toFixed(2))},${dx}`,
+      `L ${Number((W - dx).toFixed(2))},${Number((c - dx).toFixed(2))}`,
+      `Q ${W},${c} ${W},${c + f}`,
+      `L ${W},${H - r}`,
+      `Q ${W},${H} ${W - r},${H}`,
+      `L ${r},${H}`,
+      `Q 0,${H} 0,${H - r}`,
+      `L 0,${r}`,
+      `Q 0,0 ${r},0`,
+      'Z',
+    ].join(' ');
+  }
+
+  function initStageChamferBevel() {
+    const frame = document.getElementById('stageFrame');
+    const svg = document.getElementById('stageChamferSvg');
+    const clipPath = document.getElementById('stageChamferClipPath');
+    const deepPath = document.getElementById('stageDeepShadowPath');
+    const midPath = document.getElementById('stageMidBevelPath');
+    const rimPath = document.getElementById('stageSpecularRimPath');
+    if (!frame || !svg || !clipPath || !deepPath || !midPath || !rimPath) return;
+
+    const sync = () => {
+      const W = Math.max(120, Math.round(frame.clientWidth || frame.getBoundingClientRect().width));
+      const H = Math.max(80, Math.round(frame.clientHeight || frame.getBoundingClientRect().height));
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('width', String(W));
+      svg.setAttribute('height', String(H));
+      const d = buildChamferPath(W, H, 20, 82, 18);
+      clipPath.setAttribute('d', d);
+      deepPath.setAttribute('d', d);
+      midPath.setAttribute('d', d);
+      rimPath.setAttribute('d', d);
+    };
+
+    sync();
+    requestAnimationFrame(sync);
+    root.addEventListener('load', sync, { passive: true });
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(sync).observe(frame);
+    }
+    root.addEventListener('resize', sync, { passive: true });
+  }
+
   if (typeof document !== 'undefined') {
     const boot = () => {
       initBackgroundShader();
       initInteractive3DBevels();
+      initStageChamferBevel();
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();
   }
 
-  const api = { initBackgroundShader, initInteractive3DBevels };
+  const api = { initBackgroundShader, initInteractive3DBevels, initStageChamferBevel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaLiquidShader = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -52,26 +52,55 @@
       if (sceneMode === 'dna') {
         ctx.fillStyle = 'rgba(2, 3, 5, 0.25)'; ctx.fillRect(0, 0, W, H);
         helixAngle += 0.025;
-        const numPairs = 45, radius = H * 0.21, length = W * 0.62;
-        const nodeScale = Math.max(0.45, H / 1440);
-        for (let i = 0; i < numPairs; i++) {
-          const offset = (i / numPairs) * Math.PI * 6 + helixAngle;
-          const x = cx - length / 2 + (i / numPairs) * length;
+        const numPairs = 72;
+        const radius = H * 0.195;
+        const length = W * 1.05;
+        const startX = -W * 0.025;
+        const nodeScale = Math.max(0.75, H / 1080);
+
+        // Dual continuous translucent DNA backbone ribbons edge-to-edge
+        for (let strand = 0; strand < 2; strand++) {
+          ctx.beginPath();
+          const phaseOffset = strand === 0 ? 0 : Math.PI;
+          for (let s = 0; s <= 120; s++) {
+            const frac = s / 120;
+            const x = startX + frac * length;
+            const y = cy + Math.sin(frac * Math.PI * 6.5 + helixAngle + phaseOffset) * radius;
+            if (s === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.lineWidth = Math.max(2, 4.2 * nodeScale);
+          ctx.strokeStyle = strand === 0 ? 'rgba(0, 255, 157, 0.34)' : 'rgba(139, 92, 246, 0.36)';
+          ctx.stroke();
+        }
+
+        for (let i = 0; i <= numPairs; i++) {
+          const frac = i / numPairs;
+          const offset = frac * Math.PI * 6.5 + helixAngle;
+          const x = startX + frac * length;
           const y1 = cy + Math.sin(offset) * radius;
           const y2 = cy + Math.sin(offset + Math.PI) * radius;
           const z1 = Math.cos(offset), z2 = Math.cos(offset + Math.PI);
           ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, y2);
-          ctx.lineWidth = Math.max(1.5, (3 + z1 * 1.5) * nodeScale);
-          ctx.strokeStyle = `rgba(0, 240, 255, ${0.42 + z1 * 0.3})`;
+          ctx.lineWidth = Math.max(2, (4.2 + z1 * 2.2) * nodeScale);
+          ctx.strokeStyle = `rgba(0, 240, 255, ${0.42 + z1 * 0.34})`;
           ctx.stroke();
 
-          const r1 = Math.max(3, (12 + z1 * 5) * nodeScale);
+          const r1 = Math.max(4, (14 + z1 * 6) * nodeScale);
+          if (z1 > 0.25) {
+            ctx.beginPath(); ctx.arc(x, y1, r1 * 1.75, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 255, 157, 0.16)'; ctx.fill();
+          }
           ctx.beginPath(); ctx.arc(x, y1, r1, 0, Math.PI * 2);
           ctx.fillStyle = '#00FF9D'; ctx.fill();
 
-          const r2 = Math.max(3, (12 + z2 * 5) * nodeScale);
+          const r2 = Math.max(4, (14 + z2 * 6) * nodeScale);
+          if (z2 > 0.25) {
+            ctx.beginPath(); ctx.arc(x, y2, r2 * 1.75, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(139, 92, 246, 0.18)'; ctx.fill();
+          }
           ctx.beginPath(); ctx.arc(x, y2, r2, 0, Math.PI * 2);
-          ctx.fillStyle = '#8B5CF6'; ctx.fill();
+          ctx.fillStyle = '#9D6CFF'; ctx.fill();
         }
       } else if (sceneMode === 'binary') {
         ctx.fillStyle = 'rgba(1, 2, 4, 0.16)'; ctx.fillRect(0, 0, W, H);

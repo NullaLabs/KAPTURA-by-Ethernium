@@ -55,14 +55,35 @@
       </div>
     </div>
 
-    <div class="stage-frame">
-      <div class="rec-indicator" id="recIndicator">
-        <div class="rec-dot"></div>
-        <span id="recTimer" style="color:var(--red); font-weight:700">REC 00:00:00</span>
+    <div class="stage-recess-wrap">
+      <div class="stage-frame" id="stageFrame">
+        <div class="rec-indicator" id="recIndicator">
+          <div class="rec-dot"></div>
+          <span id="recTimer" style="color:var(--red); font-weight:700">REC 00:00:00</span>
+        </div>
+        <div class="fps-badge" id="fpsDisplay">— FPS</div>
+        <canvas id="renderCanvas" width="3840" height="2160"></canvas>
+        <video id="previewVideo" autoplay playsinline muted></video>
+        <svg class="stage-chamfer-svg" id="stageChamferSvg" aria-hidden="true">
+          <defs>
+            <clipPath id="stageChamferClip" clipPathUnits="userSpaceOnUse">
+              <path id="stageChamferClipPath" d="" />
+            </clipPath>
+            <filter id="stageDeepShadowFilter" x="-10%" y="-10%" width="120%" height="120%">
+              <feGaussianBlur stdDeviation="9" />
+            </filter>
+            <linearGradient id="stageRimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="rgba(255,255,255,0.42)" />
+              <stop offset="48%" stop-color="rgba(0,240,255,0.56)" />
+              <stop offset="72%" stop-color="rgba(0,255,157,0.38)" />
+              <stop offset="100%" stop-color="rgba(255,255,255,0.18)" />
+            </linearGradient>
+          </defs>
+          <path id="stageDeepShadowPath" d="" fill="none" stroke="rgba(0,0,0,0.99)" stroke-width="36" filter="url(#stageDeepShadowFilter)" />
+          <path id="stageMidBevelPath" d="" fill="none" stroke="rgba(1,2,6,0.96)" stroke-width="12" />
+          <path id="stageSpecularRimPath" d="" fill="none" stroke="url(#stageRimGrad)" stroke-width="2.6" />
+        </svg>
       </div>
-      <div class="fps-badge" id="fpsDisplay">— FPS</div>
-      <canvas id="renderCanvas" width="3840" height="2160"></canvas>
-      <video id="previewVideo" autoplay playsinline muted></video>
     </div>
 
     <div class="controls-grid" style="grid-template-columns: repeat(5, 1fr);">
