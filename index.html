@@ -53,6 +53,7 @@
       <div class="quick-hero-actions">
         <button class="btn btn-primary" id="btnQuickScreen" type="button">🖥️ Grabar Pantalla / Ventana</button>
         <button class="btn btn-secondary" id="btnQuickOpenFile" type="button">📂 Abrir Vídeo en Stage</button>
+        <button class="btn btn-demo-forensic" id="btnForensicDemo" type="button" title="Genera un patrón 480×270 de alta frecuencia, lo escala a 4K con Lanczos-3 + CAS y abre el Inspector Óptico Forense sin permisos">⚡ Demo Forense (1 clic)</button>
         <input type="file" id="stageFileInput" accept="video/*" style="display:none">
       </div>
     </div>
@@ -432,6 +433,8 @@
         El perfil neuronal Real-ESRGAN se ejecuta en el motor independiente UPSKALETOR: KAPTURA entrega el master sin alterarlo y te da el comando firmado. Sin barras falsas.
       </p>
 
+      <div class="readiness-strip" id="upskaletorReadinessBar"></div>
+
       <div class="dropzone" id="upskaletorDropzone" style="border-color:var(--violet); background:rgba(139,92,246,0.04)">
         <div class="dz-icon" style="color:var(--violet)">◆</div>
         <div class="dz-title" id="upskaletorDzTitle">DRAG &amp; DROP VIDEO OR IMAGE HERE TO UPSCALE</div>
@@ -462,6 +465,7 @@
             <option value="youtube_4k">📺 YouTube 4K Master</option>
             <option value="720p">📱 720p Compact</option>
           </select>
+          <div class="profile-intent-hint" id="upskaletorProfileHint"></div>
         </div>
         <div class="control-card">
           <div class="control-label">ENGINE HINT</div>
@@ -502,6 +506,12 @@
     <div>BUFFER SIZE: <span class="stat-val" id="statSize">0.0 MB</span></div>
     <div>SOURCE: <span class="stat-val" id="statSourceMode" style="color:var(--emerald)">CANVAS ENGINE</span></div>
     <div>DAEMON: <span class="stat-val" id="statDaemon" style="color:var(--muted)">STATIC (BROWSER)</span></div>
+  </div>
+
+  <!-- TRANSMEDIA BRAND ARCHITECTURE FOOTER -->
+  <div class="sovereign-footer">
+    <span><strong>ETHERNIUM</strong> · Transmedia Tech Universe (Art · Web3 · Lore · Tech · AI · Tools)</span>
+    <span><a href="https://github.com/NullaLabs" target="_blank" rel="noopener">Engineered by NullaLabs</a> · <a href="https://github.com/NullaLabs/KAPTURA-by-Ethernium/blob/main/BENCHMARK_PROOF.md" target="_blank" rel="noopener">Benchmark Proof</a> · <a href="https://github.com/NullaLabs/KAPTURA-by-Ethernium" target="_blank" rel="noopener">Source</a> · <strong>NEMETH CORP.</strong></span>
   </div>
 </div>
 

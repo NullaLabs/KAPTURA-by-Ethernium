@@ -61,6 +61,8 @@
         const el = $('capDaemon3370');
         const gpuBtn = $('btnGpuRender');
         const statD = $('statDaemon');
+        if (typeof updateUpskaletorReadiness === 'function') updateUpskaletorReadiness(dh);
+        if (typeof updateUpskaletorProfileHint === 'function') updateUpskaletorProfileHint();
         if (!el || !dh || !dh.online) return;
         const label = dh.hardwareAccelerated ? `NVENC :3370 (${dh.preferredCodec})` : (dh.ffmpegAvailable ? 'Daemon :3370' : 'Daemon :3370 (UI)');
         el.className = 'cap-chip on';
@@ -898,6 +900,136 @@
     });
   }
 
+  function updateUpskaletorReadiness(dh) {
+    const bar = $('upskaletorReadinessBar');
+    if (!bar) return;
+    const h = dh || (window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {});
+    const items = [
+      { label: 'WebGL Lanczos+CAS', on: Boolean(caps && caps.gpu && caps.gpu.webgl) },
+      { label: h && h.hardwareAccelerated ? `GPU Daemon :3370 (${h.preferredCodec})` : 'GPU Daemon :3370', on: Boolean(h && h.online && h.ffmpegAvailable) },
+      { label: 'Real-ESRGAN Vulkan', on: Boolean(h && h.neuralAvailable) },
+      { label: 'RIFE v4.6 2×FPS', on: Boolean(h && h.rifeAvailable) },
+    ];
+    bar.innerHTML = items.map((i) => `<span class="readiness-pill ${i.on ? 'on' : 'off'}">${i.on ? '●' : '○'} ${i.label}</span>`).join('');
+  }
+
+  function updateUpskaletorProfileHint() {
+    const sel = $('upskaletorProfileSelect');
+    const hint = $('upskaletorProfileHint');
+    if (!sel || !hint || !window.KapturaUpskaletor) return;
+    const key = sel.value;
+    const prof = (window.KapturaUpskaletor.PROFILES && window.KapturaUpskaletor.PROFILES[key]) || {};
+    const h = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+    if (!prof.ai) {
+      const dims = prof.w && prof.h ? `${prof.w}×${prof.h}` : `${prof.scale || 2}×`;
+      hint.textContent = prof.sharpen
+        ? `Tiempo real (${dims}) · Filtro AMD CAS + CFR sin pérdida en navegador o NVENC :3370.`
+        : `Escalado matemático real (${dims}) en navegador o GPU Daemon :3370.`;
+      return;
+    }
+    if (prof.pipeline === 'rife') {
+      hint.textContent = h && h.rifeAvailable
+        ? 'RIFE v4.6 Vulkan activo en :3370 — duplica FPS nativos (p.ej. 30→60 fps) preservando audio.'
+        : 'Requiere rife-ncnn-vulkan (ejecuta `npm run setup:neural` o usa handoff CLI honesto).';
+      return;
+    }
+    if (prof.pipeline === 'hybrid') {
+      hint.textContent = h && h.neuralAvailable && h.rifeAvailable
+        ? 'Pipeline dual activo (:3370): Real-ESRGAN 4K espacial + RIFE v4.6 2× FPS temporal.'
+        : 'Requiere Real-ESRGAN + RIFE Vulkan (`npm run setup:neural`); sin binarios entrega comando CLI.';
+      return;
+    }
+    hint.textContent = h && h.neuralAvailable
+      ? `Real-ESRGAN (${prof.model || 'x4plus'}) activo en GPU Vulkan vía :3370.`
+      : 'Requiere realesrgan-ncnn-vulkan (`npm run setup:neural`); sin binario hace handoff honesto.';
+  }
+
+  function synthesizeForensicSampleFile() {
+    const w = 480;
+    const h = 270;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#050814';
+    g.fillRect(0, 0, w, h);
+
+    g.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+    g.lineWidth = 1;
+    for (let x = 0; x < w; x += 24) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h); g.stroke(); }
+    for (let y = 0; y < h; y += 24) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); g.stroke(); }
+
+    // Checkerboard calibration corner (top-left)
+    for (let cy = 0; cy < 48; cy += 6) {
+      for (let cx = 0; cx < 96; cx += 6) {
+        g.fillStyle = ((cx + cy) / 6) % 2 === 0 ? '#e2f8ff' : '#0b1224';
+        g.fillRect(14 + cx, 14 + cy, 6, 6);
+      }
+    }
+
+    // Crisp concentric rings + diagonal laser lines
+    g.strokeStyle = '#00ff9d';
+    g.lineWidth = 2;
+    for (let r = 18; r <= 78; r += 15) {
+      g.beginPath(); g.arc(365, 138, r, 0, Math.PI * 2); g.stroke();
+    }
+    g.strokeStyle = '#a855f7';
+    g.lineWidth = 1.5;
+    for (let i = -270; i < w; i += 32) {
+      g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 270, h); g.stroke();
+    }
+
+    // High-contrast crisp HUD text for Sobel sharpness test
+    g.fillStyle = '#ffffff';
+    g.font = 'bold 20px sans-serif';
+    g.fillText('ETHERNIUM // KAPTURA 4K', 18, 128);
+    g.fillStyle = '#00f0ff';
+    g.font = 'bold 13px monospace';
+    g.fillText('480x270 -> 3840x2160 (64x PIXELS)', 18, 152);
+    g.fillStyle = '#fde68a';
+    g.fillText('LANCZOS-3 + AMD CAS + SOBEL PROOF', 18, 174);
+
+    return new Promise((resolve, reject) => {
+      c.toBlob((blob) => {
+        if (!blob) reject(new Error('No se pudo sintetizar la muestra forense.'));
+        else resolve(new File([blob], 'kaptura_forensic_demo_480x270.png', { type: 'image/png' }));
+      }, 'image/png');
+    });
+  }
+
+  let skipNextAutoDownload = false;
+
+  updateUpskaletorReadiness(null);
+  updateUpskaletorProfileHint();
+  if ($('upskaletorProfileSelect')) {
+    $('upskaletorProfileSelect').addEventListener('change', updateUpskaletorProfileHint);
+  }
+
+  if ($('btnForensicDemo')) {
+    $('btnForensicDemo').addEventListener('click', async () => {
+      const btn = $('btnForensicDemo');
+      btn.disabled = true;
+      try {
+        const sampleFile = await synthesizeForensicSampleFile();
+        upFile = sampleFile;
+        $('upskaletorDzTitle').textContent = `DEMO FORENSE: ${sampleFile.name}`;
+        $('upskaletorDzSub').textContent = '480×270 PNG patrón de alta frecuencia · Escalando a 3840×2160 (4K CAS)…';
+        const upTabBtn = document.querySelector('.tab-btn[data-tab="tab-upskaletor"]');
+        if (upTabBtn) upTabBtn.click();
+        if ($('upskaletorProfileSelect')) {
+          $('upskaletorProfileSelect').value = '4k_cas';
+          $('upskaletorProfileSelect').dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        skipNextAutoDownload = true;
+        $('btnUpscaleNow').click();
+      } catch (e) {
+        toast(e.message || String(e), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f) => {
     upFile = f;
     const isImg = window.KapturaUpskaletor.isImageFile(f);
@@ -990,7 +1122,9 @@
             isRife: result.pipeline === 'rife' || result.pipeline === 'hybrid',
           });
         }
-        downloadBlob(result.blob, name);
+        const autoDl = !skipNextAutoDownload;
+        skipNextAutoDownload = false;
+        if (autoDl) downloadBlob(result.blob, name);
         await saveToVault({ blob: result.blob, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: result.blob.size });
         if (result.fellBack) toast('MP4 no disponible; guardado WebM real.', 'notice');
         status.textContent = `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;

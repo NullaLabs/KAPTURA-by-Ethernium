@@ -110,6 +110,7 @@ fonts/ orbitron.woff2 · firacode.woff2 · inter.woff2  (subset latin, ~96 KB)
 3. Captura con **🖥️ Grabar Pantalla / Ventana**, renderiza con GPU o abre cualquier vídeo local; recórtalo en **✂️ TRIM FAST** y envíalo en 1 clic a **Cinema GIF**, **Compresor**, **SVG Vector**, **V-Converter** o **Upskaletor AI**.
 
 ```bash
+npm run setup:neural               # (opcional Windows) instala Real-ESRGAN + RIFE v4.6 Vulkan locales
 npm run daemon                     # inicia Studio + GPU Daemon en http://127.0.0.1:3370
 npm test                           # suite completa (GIF, Lanczos, SVG, Inspector Sobel, Timing, Daemon/WS/RIFE)
 npm run benchmark                  # reproduce el benchmark Ground-Truth PSNR/SSIM/VMAF y actualiza BENCHMARK_PROOF.md

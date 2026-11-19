@@ -13,6 +13,7 @@
     "test:daemon": "node tests/test_daemon_ebwp.mjs",
     "validate": "python tests/validate_kaptura.py",
     "benchmark": "node scripts/benchmark_upskaletor.mjs",
+    "setup:neural": "powershell -ExecutionPolicy Bypass -File scripts/setup-neural-engines.ps1",
     "serve": "python -m http.server 8000"
   },
   "keywords": ["screen-recorder", "transcoder", "lanczos", "gif-encoder", "webgl", "local-first", "ethernium"],
