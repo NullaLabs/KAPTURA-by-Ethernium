@@ -12,6 +12,16 @@ La resolución, frecuencia y códec efectivos dependen del navegador, el sistema
 
 ---
 
+## 📸 Visual Showcase & Launch Kit
+
+| Forensic Optical Inspector (`SPLIT A/B` · `2×`) | `Δ ×8 HEATMAP` & Telemetría Sobel (`+15.2%`) | `RIFE v4.6` Vulkan (`2×` FPS Interpolación) |
+| :---: | :---: | :---: |
+| ![SPLIT A/B 2x](docs/showcase/kaptura-studio-live.png) | ![Delta 8x Heatmap](docs/showcase/kaptura-heatmap-delta8x.png) | ![RIFE 2x Comparison](docs/showcase/rife-30-vs-60fps.gif) |
+
+Para material completo de difusión, capturas de alta resolución y plantillas de lanzamiento EN/ES (Release Notes, X, Reddit, Show HN), consulta [**LAUNCH_KIT.md**](LAUNCH_KIT.md).
+
+---
+
 ## 🔍 Por qué trasciende: Inspección Forense + Pipeline Unificado
 
 Mientras herramientas convencionales se limitan a grabar, recodificar o escalar a ciegas, KAPTURA une captura, conversión, compresión, vectorización, reescalado espacial, interpolación temporal y **prueba óptica en pantalla**:

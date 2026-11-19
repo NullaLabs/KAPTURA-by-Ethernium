@@ -12,3 +12,5 @@ __pycache__/
 
 # test artifacts
 tests/sample_output.gif
+!docs/showcase/*.png
+!docs/showcase/*.gif
