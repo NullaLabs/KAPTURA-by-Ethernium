@@ -2,6 +2,10 @@
 
 ## 3.0.0
 
+- upgrades the UI to a Liquid Glass 3D Obsidian chassis with highlighted header Download Pro buttons, readiness indicators, profile intent hints, and a 1-click permissionless **Forensic Demo** (`480x270 -> 3840x2160`);
+- upgrades `js/comparator.js` into the **Forensic Optical Inspector** (`SPLIT A/B`, `Delta x8` pixel-delta heatmap, `SIDE x SIDE`, auto `2x`–`8x` optical zoom, `-1f/+1f` frame-step, live Sobel + Laplacian sharpness & RGB delta telemetry, and `:3370` integrity headers);
+- introduces 3-motor UPSKALETOR execution (`Lanczos-3 + AMD FidelityFX CAS + CFR`, `Real-ESRGAN Vulkan x4plus / animevideov3`, `RIFE v4.6 Vulkan 2x FPS`, and `HYBRID ULTRA 4K+60fps`) with automatic binary discovery (`npm run setup:neural`) and honest CLI handoff when local Vulkan engines are absent;
+- adds `scripts/benchmark_upskaletor.mjs` (`npm run benchmark`) and `BENCHMARK_PROOF.md` measuring reproducible SSIM, PSNR, VMAF, FPS drift, audio preservation, and zero leaked scratch files against synthesized Ground Truth;
 - adds disk-backed live streaming capture over zero-dependency WebSocket (`ws://127.0.0.1:3370/ws/capture`, `pipe-media` + `pipe-frames` MJPEG self-healing fallback);
 - streams real-time FFmpeg `-progress pipe:1` events over SSE (`GET /events`), adds `HTTP Range` (`206 Partial Content`) on `/exports/*`, and adds lossless stream-copy trimming (`POST /trim`);
 - introduces `js/audio-mixer.js` for mixed system + microphone capture with live VU telemetry;

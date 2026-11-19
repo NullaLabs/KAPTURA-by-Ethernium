@@ -12,6 +12,7 @@ PACKAGE_FILES = (
     "index.html",
     "package.json",
     "README.md",
+    "BENCHMARK_PROOF.md",
     "UPSKALETOR-HANDOFF.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -19,6 +20,8 @@ PACKAGE_FILES = (
     "requirements.txt",
     "convert_to_mp4.bat",
     "convert_webm_to_mp4.py",
+    "scripts/setup-neural-engines.ps1",
+    "scripts/benchmark_upskaletor.mjs",
 )
 PACKAGE_DIRS = (
     "css",

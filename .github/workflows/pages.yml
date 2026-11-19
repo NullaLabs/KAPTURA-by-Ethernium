@@ -1,0 +1,57 @@
+name: Deploy KAPTURA Studio to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "css/**"
+      - "fonts/**"
+      - "js/**"
+      - "BENCHMARK_PROOF.md"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Validate KAPTURA static product contract
+        run: python tests/validate_kaptura.py
+
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Stage allowlisted static Studio artifact
+        run: |
+          mkdir -p _site
+          cp index.html BENCHMARK_PROOF.md LICENSE _site/
+          cp -R css fonts js _site/
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "_site"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
