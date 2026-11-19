@@ -51,7 +51,13 @@ async function run() {
     assert.equal(health.online, true);
     assert.equal(health.port, port);
     assert.equal(typeof health.capabilities.neuralAvailable, "boolean", "Daemon /health must report neuralAvailable capability");
-    assert.equal(typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
+    assert.equal(health.capabilities && typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
+    assert.equal(health.streaming && health.streaming.cancelEndpoint, "/cancel", "Daemon /health must expose /cancel endpoint");
+    const cancelMissRes = await httpRequest(port, "/cancel/nonexistent_task", "POST");
+    assert.equal(cancelMissRes.status, 200);
+    const cancelMissJson = JSON.parse(cancelMissRes.body.toString("utf8"));
+    assert.equal(cancelMissJson.ok, true);
+    assert.equal(cancelMissJson.cancelled, false);
     assert.equal(typeof health.providers.realEsrgan, "boolean", "Daemon /health must report realEsrgan provider availability");
     assert.equal(typeof health.providers.rife, "boolean", "Daemon /health must report rife provider availability");
 

@@ -105,6 +105,8 @@
             height: profile.h || 0,
             denoise: Boolean(profile.denoise),
             quality: 'high',
+            taskId: opts.taskId,
+            signal: opts.signal,
             onProgress: opts.onProgress,
           });
           if (aiRes && aiRes.blob) {
@@ -122,7 +124,8 @@
               neural: true,
             };
           }
-        } catch {
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
           // Fall through cleanly to honest handoff when neural daemon pass fails or binary missing
         }
       }
@@ -191,9 +194,12 @@
           quality: 'max',
           sharpen: profile.sharpen || 0,
           cfr: Boolean(profile.cfr),
+          taskId: opts.taskId,
+          signal: opts.signal,
           onProgress: opts.onProgress,
         });
-      } catch {
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
         result = null;
       }
     }

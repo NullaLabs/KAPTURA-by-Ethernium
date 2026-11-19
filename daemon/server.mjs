@@ -10,7 +10,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
+import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, cancelTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
 import { detectVideoBackend } from "./pipeline/gpuDirectOptimizer.mjs";
 import { getCompanionStatus } from "./providers/adapters.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "./synkronia/ebwpProtocol.mjs";
@@ -127,6 +127,7 @@ export function createKapturaDaemon({
         rangeSupported: true,
         trimEndpoint: "/trim",
         upscaleAiEndpoint: "/upscale-ai",
+        cancelEndpoint: "/cancel",
       },
       providers: {
         etherniumVox: providers.etherniumVox,
@@ -383,7 +384,7 @@ export function createKapturaDaemon({
         });
 
         if (!result.success) {
-          const code = result.status === "empty_input" || result.status === "missing_input" ? 400 : 422;
+          const code = result.status === "cancelled" ? 409 : (result.status === "empty_input" || result.status === "missing_input" ? 400 : 422);
           return sendJson(res, code, result);
         }
         if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
@@ -405,6 +406,18 @@ export function createKapturaDaemon({
       } catch (err) {
         return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
       }
+    }
+
+    if (req.method === "POST" && pathname.startsWith("/cancel/")) {
+      const targetTaskId = decodeURIComponent(pathname.slice("/cancel/".length)).trim();
+      if (!targetTaskId) {
+        return sendJson(res, 400, { ok: false, error: "Task ID is required." });
+      }
+      const resCancel = cancelTask(targetTaskId);
+      if (resCancel.cancelled) {
+        emitProgressEvent({ taskId: targetTaskId, stage: "CANCELLED", progress: 0 });
+      }
+      return sendJson(res, 200, { ok: true, taskId: targetTaskId, cancelled: Boolean(resCancel.cancelled) });
     }
 
     if (req.method === "POST" && pathname === "/upscale-ai") {
@@ -456,7 +469,7 @@ export function createKapturaDaemon({
         });
 
         if (!result.success) {
-          const code = result.status === "empty_input" || result.status === "missing_input" ? 400 : 422;
+          const code = result.status === "cancelled" ? 409 : (result.status === "empty_input" || result.status === "missing_input" ? 400 : 422);
           return sendJson(res, code, result);
         }
         if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {

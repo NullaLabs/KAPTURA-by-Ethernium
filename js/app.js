@@ -1037,13 +1037,32 @@
     $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen' : (f.type || 'video')}`;
   });
 
+  let activeUpscaleCtrl = null;
+  let activeUpscaleTaskId = '';
+
+  if ($('btnCancelUpscale')) {
+    $('btnCancelUpscale').addEventListener('click', () => {
+      if (activeUpscaleCtrl) {
+        try { activeUpscaleCtrl.abort(); } catch {}
+      }
+      if (activeUpscaleTaskId && window.KapturaDaemon && window.KapturaDaemon.cancelTaskViaDaemon) {
+        window.KapturaDaemon.cancelTaskViaDaemon(activeUpscaleTaskId);
+      }
+      $('upskaletorStatus').textContent = '✕ Cancelando proceso GPU…';
+    });
+  }
+
   $('btnUpscaleNow').addEventListener('click', async () => {
     const activeSrc = upFile || lastMaster;
     if (!activeSrc) { toast('Arrastra un vídeo o imagen primero.', 'error'); return; }
     const profile = $('upskaletorProfileSelect').value;
     const engine = $('upskaletorEngineSelect').value;
     const status = $('upskaletorStatus');
+    const cancelBtn = $('btnCancelUpscale');
+    activeUpscaleTaskId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    activeUpscaleCtrl = typeof AbortController === 'function' ? new AbortController() : null;
     $('btnUpscaleNow').disabled = true;
+    if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     setUpscaleDownloadReady(false, 'kaptura_upscaled', '⬇ DESCARGAR UPSKALED', null);
     if ($('upskaletorResult')) $('upskaletorResult').style.display = 'none';
     if (upBeforeRevoke) { upBeforeRevoke(); upBeforeRevoke = null; }
@@ -1068,9 +1087,14 @@
 
       const result = await window.KapturaUpskaletor.run(fileObj, profile, engine, {
         caps,
+        taskId: activeUpscaleTaskId,
+        signal: activeUpscaleCtrl ? activeUpscaleCtrl.signal : undefined,
         onProgress: (p, m) => {
           setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', p);
-          status.textContent = `Procesando ${Math.round(p * 100)}%${m && m.speed ? ' · ' + m.speed : ''}…`;
+          const stageTag = m && m.stage ? ` · ${m.stage}` : '';
+          const frameTag = m && m.frame ? ` f${m.frame}` : '';
+          const speedTag = m && m.speed ? ` · ${m.speed}` : '';
+          status.textContent = `Procesando ${Math.round(p * 100)}%${stageTag}${frameTag}${speedTag}…`;
         },
       });
       if (result.mode === 'handoff') {
@@ -1130,8 +1154,22 @@
         status.textContent = `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;
         toast(`Proceso real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');
       }
-    } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
-    finally { $('btnUpscaleNow').disabled = false; setTimeout(() => setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', 0), 800); }
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        status.textContent = '✕ Proceso cancelado por el operador.';
+        toast('Proceso GPU cancelado limpiamente.', 'notice');
+      } else {
+        status.textContent = '';
+        toast(e.message || String(e), 'error');
+      }
+    }
+    finally {
+      activeUpscaleCtrl = null;
+      activeUpscaleTaskId = '';
+      $('btnUpscaleNow').disabled = false;
+      if ($('btnCancelUpscale')) $('btnCancelUpscale').style.display = 'none';
+      setTimeout(() => setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', 0), 800);
+    }
   });
 
   $('btnCopyCmd').addEventListener('click', async () => {

@@ -163,6 +163,7 @@
         method: 'POST',
         headers,
         body: sourceExport ? new Uint8Array(0) : file,
+        signal: opts.signal,
       });
       if (!res.ok) {
         const msg = await res.text().catch(() => `HTTP ${res.status}`);
@@ -457,6 +458,7 @@
         method: 'POST',
         headers,
         body: sourceExport ? new Uint8Array(0) : file,
+        signal: opts.signal,
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => `HTTP ${res.status}`);
@@ -490,6 +492,17 @@
     }
   }
 
+  async function cancelTaskViaDaemon(taskId) {
+    if (!taskId) return { ok: false, cancelled: false };
+    try {
+      const res = await fetch(`${DAEMON_BASE}/cancel/${encodeURIComponent(taskId)}`, { method: 'POST' });
+      if (!res.ok) return { ok: false, cancelled: false };
+      return await res.json();
+    } catch {
+      return { ok: false, cancelled: false };
+    }
+  }
+
   const api = {
     DAEMON_BASE,
     probeHealth,
@@ -500,6 +513,7 @@
     subscribeTaskProgress,
     transcodeViaDaemon,
     upscaleAiViaDaemon,
+    cancelTaskViaDaemon,
     trimViaDaemon,
     openCaptureSocket,
     renderViaDaemon,

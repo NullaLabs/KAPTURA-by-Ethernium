@@ -12,6 +12,47 @@ import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, re
 
 const ALLOWED_INPUT_EXTS = new Set([".webm", ".mp4", ".mov", ".mkv", ".avi", ".gif", ".png", ".jpg", ".jpeg", ".webp"]);
 
+const activeTasks = new Map();
+
+function registerTask(taskId) {
+  if (!taskId) return null;
+  let rec = activeTasks.get(taskId);
+  if (!rec) {
+    rec = { aborted: false, procs: new Set() };
+    activeTasks.set(taskId, rec);
+  }
+  return rec;
+}
+
+function unregisterTask(taskId) {
+  if (taskId) activeTasks.delete(taskId);
+}
+
+function isTaskAborted(taskId) {
+  const rec = taskId ? activeTasks.get(taskId) : null;
+  return Boolean(rec && rec.aborted);
+}
+
+function trackChildProc(taskId, proc) {
+  const rec = taskId ? activeTasks.get(taskId) : null;
+  if (!rec || !proc) return () => {};
+  rec.procs.add(proc);
+  return () => { rec.procs.delete(proc); };
+}
+
+/** Cancel an active GPU transcode/neural task and terminate its child processes cleanly. */
+export function cancelTask(taskId) {
+  if (!taskId) return { cancelled: false };
+  const rec = activeTasks.get(taskId);
+  if (!rec) return { cancelled: false };
+  rec.aborted = true;
+  for (const proc of rec.procs) {
+    try { proc.kill("SIGKILL"); } catch { try { proc.kill(); } catch {} }
+  }
+  rec.procs.clear();
+  return { cancelled: true };
+}
+
 function evenDim(n) {
   const v = Math.max(2, Math.round(Number(n) || 0));
   return v & ~1;
@@ -45,10 +86,15 @@ function pruneOldExports(outputDir, maxAgeMs = 15 * 60 * 1000, maxFiles = 20) {
 
 function runFfmpegArgs(ffmpegPath, args, options = {}) {
   const opts = typeof options === "function" ? { onStderrLine: options } : (options || {});
-  const { onStderrLine, onProgressMeta, totalDurationSec = 0 } = opts;
+  const { onStderrLine, onProgressMeta, totalDurationSec = 0, taskId = "" } = opts;
+
+  if (isTaskAborted(taskId)) {
+    return Promise.resolve({ code: -2, aborted: true, stderr: "Cancelled" });
+  }
 
   return new Promise((resolve) => {
     const proc = spawn(ffmpegPath, args, { windowsHide: true });
+    const untrack = trackChildProc(taskId, proc);
     let stderr = "";
     let stdoutBuf = "";
     let progressState = {};
@@ -92,8 +138,8 @@ function runFfmpegArgs(ffmpegPath, args, options = {}) {
       if (stderr.length > 16384) stderr = stderr.slice(-16384);
       if (typeof onStderrLine === "function") onStderrLine(text);
     });
-    proc.on("error", (err) => resolve({ code: -1, stderr: String(err) }));
-    proc.on("close", (code) => resolve({ code: code ?? 1, stderr }));
+    proc.on("error", (err) => { untrack(); resolve({ code: -1, stderr: String(err) }); });
+    proc.on("close", (code) => { untrack(); resolve({ code: code ?? 1, aborted: isTaskAborted(taskId), stderr }); });
   });
 }
 
@@ -192,7 +238,11 @@ async function encodeWithSafeFallback({
   const res = await runFfmpegArgs(ffmpegPath, primaryArgs, {
     onProgressMeta: emitMeta,
     totalDurationSec,
+    taskId,
   });
+  if (res.aborted || isTaskAborted(taskId)) {
+    return { ok: false, aborted: true, error: "Cancelled" };
+  }
   if (res.code === 0 && fs.existsSync(outputPath)) {
     return { ok: true, codec: primary.codec, hardwareAccelerated: primary.hardwareAccelerated, fallbackCpu: false };
   }
@@ -222,6 +272,7 @@ async function encodeWithSafeFallback({
     const cpuRes = await runFfmpegArgs(ffmpegPath, cpuArgs, {
       onProgressMeta: emitCpuMeta,
       totalDurationSec,
+      taskId,
     });
     if (cpuRes.code === 0 && fs.existsSync(outputPath)) {
       return { ok: true, codec: "libx264", hardwareAccelerated: false, fallbackCpu: true };
@@ -300,6 +351,7 @@ export async function transcodeMediaTask({
   const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".webm";
   let stagedInput = inputPath ? path.resolve(inputPath) : "";
   let createdTemp = false;
+  registerTask(taskId);
 
   try {
     if (!stagedInput && inputBuffer) {
@@ -316,6 +368,10 @@ export async function transcodeMediaTask({
     const inputStat = fs.statSync(stagedInput);
     if (inputStat.size === 0) {
       return { success: false, status: "empty_input", error: "Input media file is empty (0 bytes)." };
+    }
+
+    if (isTaskAborted(taskId)) {
+      return { success: false, status: "cancelled", error: "Task cancelled by operator." };
     }
 
     const t0 = Date.now();
@@ -387,6 +443,10 @@ export async function transcodeMediaTask({
       taskId,
     });
 
+    if (encRes.aborted || isTaskAborted(taskId)) {
+      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+      return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+    }
     if (!encRes.ok) {
       return { success: false, status: "encode_failed", error: encRes.error };
     }
@@ -420,6 +480,7 @@ export async function transcodeMediaTask({
       providers: getCompanionStatus(),
     };
   } finally {
+    unregisterTask(taskId);
     if (createdTemp && stagedInput && fs.existsSync(stagedInput)) {
       try { fs.unlinkSync(stagedInput); } catch {}
     }
@@ -804,15 +865,40 @@ export async function renderVideoTask({
 
 const IMAGE_AI_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"]);
 
-function runProcessArgs(binPath, args, cwd) {
+function runProcessArgs(binPath, args, cwd, opts = {}) {
+  const { taskId = "", onOutputLine = null } = opts || {};
+  if (isTaskAborted(taskId)) {
+    return Promise.resolve({ code: -2, aborted: true, stdout: "", stderr: "Cancelled" });
+  }
   return new Promise((resolve) => {
     const proc = spawn(binPath, args, { cwd: cwd || undefined, windowsHide: true });
+    const untrack = trackChildProc(taskId, proc);
     let stdout = "";
     let stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.on("error", (err) => resolve({ code: 1, stdout, stderr: err.message }));
-    proc.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    let lineBuf = "";
+    const pushChunk = (chunk, isErr) => {
+      const s = chunk.toString();
+      if (isErr) {
+        stderr += s;
+        if (stderr.length > 16384) stderr = stderr.slice(-16384);
+      } else {
+        stdout += s;
+        if (stdout.length > 16384) stdout = stdout.slice(-16384);
+      }
+      if (typeof onOutputLine === "function") {
+        lineBuf += s;
+        const parts = lineBuf.split(/[\r\n]+/);
+        lineBuf = parts.pop() || "";
+        for (const p of parts) {
+          const trimmed = p.trim();
+          if (trimmed) onOutputLine(trimmed);
+        }
+      }
+    };
+    proc.stdout.on("data", (d) => pushChunk(d, false));
+    proc.stderr.on("data", (d) => pushChunk(d, true));
+    proc.on("error", (err) => { untrack(); resolve({ code: 1, stdout, stderr: err.message }); });
+    proc.on("close", (code) => { untrack(); resolve({ code: code ?? 1, aborted: isTaskAborted(taskId), stdout, stderr }); });
   });
 }
 
@@ -891,6 +977,7 @@ export async function upscaleAiTask({
   const isImage = IMAGE_AI_EXTS.has(cleanExt);
   const workDir = path.join(outputDir, `.tmp_${taskId}`);
   fs.mkdirSync(workDir, { recursive: true });
+  registerTask(taskId);
 
   try {
     let stagedInput = inputPath ? path.resolve(inputPath) : "";
@@ -916,12 +1003,24 @@ export async function upscaleAiTask({
       const binDir = path.dirname(realEsrganPath);
       const modelsDir = path.join(binDir, "models");
       const activeModel = resolveNeuralModelName(model, modelsDir, safeScale);
-      if (typeof onProgress === "function") onProgress({ taskId, stage: "NEURAL_INFER", progress: 25 });
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "NEURAL_INFER", progress: 20 });
       const rawOut = path.join(workDir, "neural_out.png");
       const finalOut = `${taskId}.png`;
       const finalPath = path.join(outputDir, finalOut);
-      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png"];
-      const res = await runProcessArgs(realEsrganPath, aiArgs, binDir);
+      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png", "-v"];
+      const res = await runProcessArgs(realEsrganPath, aiArgs, binDir, {
+        taskId,
+        onOutputLine: (line) => {
+          const m = /(\d+)[.,]\d+%/.exec(line);
+          if (m && typeof onProgress === "function") {
+            const pct = Math.max(20, Math.min(92, 20 + Math.round(Number(m[1]) * 0.72)));
+            onProgress({ taskId, stage: "NEURAL_INFER", progress: pct });
+          }
+        },
+      });
+      if (res.aborted || isTaskAborted(taskId)) {
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
       if (res.code !== 0 || !fs.existsSync(rawOut)) {
         return { success: false, status: "ai_failed", error: (res.stderr || "Real-ESRGAN image inference failed").slice(-500) };
       }
@@ -929,7 +1028,8 @@ export async function upscaleAiTask({
       if (width > 0 && backend.available && backend.ffmpegPath) {
         const filters = [height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`];
         if (denoise) filters.unshift("hqdn3d=1.2:1.2:4:4");
-        await runFfmpegArgs(backend.ffmpegPath, ["-hide_banner", "-y", "-i", rawOut, "-vf", filters.join(","), finalPath]);
+        await runFfmpegArgs(backend.ffmpegPath, ["-hide_banner", "-y", "-i", rawOut, "-vf", filters.join(","), finalPath], { taskId });
+        if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
       } else {
         fs.copyFileSync(rawOut, finalPath);
       }
@@ -998,17 +1098,24 @@ export async function upscaleAiTask({
 
     const concatList = [];
     for (let i = 0; i < segFiles.length; i++) {
+      if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      const segBase = 12 + (i / segFiles.length) * 80;
+      const segSpan = 80 / segFiles.length;
       const segIn = path.join(segDir, segFiles[i]);
       const framesIn = path.join(workDir, `f_in_${i}`);
       fs.mkdirSync(framesIn, { recursive: true });
 
       const exRes = await runFfmpegArgs(backend.ffmpegPath, [
         "-hide_banner", "-y", "-i", segIn, path.join(framesIn, "f_%06d.png"),
-      ]);
+      ], { taskId });
+      if (exRes.aborted || isTaskAborted(taskId)) {
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
       if (exRes.code !== 0) {
         return { success: false, status: "extract_failed", error: exRes.stderr.slice(-500) };
       }
 
+      const rawCount = Math.max(1, fs.readdirSync(framesIn).filter((f) => f.endsWith(".png")).length);
       let currentFramesDir = framesIn;
       let inputPattern = "f_%06d.png";
       let startNumber = 1;
@@ -1016,9 +1123,29 @@ export async function upscaleAiTask({
       if (needsEsrgan) {
         const framesSr = path.join(workDir, `f_sr_${i}`);
         fs.mkdirSync(framesSr, { recursive: true });
+        let doneFrames = 0;
+        const srBase = segBase;
+        const srSpan = needsRife ? segSpan * 0.5 : segSpan * 0.85;
         const aiRes = await runProcessArgs(realEsrganPath, [
-          "-i", currentFramesDir, "-o", framesSr, "-m", esrganModelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png",
-        ], esrganBinDir);
+          "-i", currentFramesDir, "-o", framesSr, "-m", esrganModelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png", "-v",
+        ], esrganBinDir, {
+          taskId,
+          onOutputLine: (line) => {
+            if (line.includes("->") && line.includes("done") && typeof onProgress === "function") {
+              doneFrames++;
+              const frac = Math.min(1, doneFrames / rawCount);
+              onProgress({
+                taskId,
+                stage: "ESRGAN",
+                frame: doneFrames,
+                progress: Math.min(91, Math.round(srBase + frac * srSpan)),
+              });
+            }
+          },
+        });
+        if (aiRes.aborted || isTaskAborted(taskId)) {
+          return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+        }
         if (aiRes.code !== 0) {
           return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
         }
@@ -1027,14 +1154,35 @@ export async function upscaleAiTask({
       }
 
       if (needsRife) {
+        if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
         const framesRife = path.join(workDir, `f_rife_${i}`);
         fs.mkdirSync(framesRife, { recursive: true });
         const inPngs = fs.readdirSync(currentFramesDir).filter((f) => f.endsWith(".png")).sort();
         if (inPngs.length >= 2) {
           const targetCount = inPngs.length * safeMult;
+          let rifeFrames = 0;
+          const rifeBase = needsEsrgan ? (segBase + segSpan * 0.5) : segBase;
+          const rifeSpan = needsEsrgan ? (segSpan * 0.35) : (segSpan * 0.85);
           const rRes = await runProcessArgs(rifePath, [
-            "-i", currentFramesDir, "-o", framesRife, "-m", resolvedRifeModelDir, "-n", String(targetCount), "-f", "%08d.png",
-          ], rifeBinDir);
+            "-i", currentFramesDir, "-o", framesRife, "-m", resolvedRifeModelDir, "-n", String(targetCount), "-f", "%08d.png", "-v",
+          ], rifeBinDir, {
+            taskId,
+            onOutputLine: (line) => {
+              if (line.includes("->") && line.includes("done") && typeof onProgress === "function") {
+                rifeFrames++;
+                const frac = Math.min(1, rifeFrames / targetCount);
+                onProgress({
+                  taskId,
+                  stage: "RIFE",
+                  frame: rifeFrames,
+                  progress: Math.min(91, Math.round(rifeBase + frac * rifeSpan)),
+                });
+              }
+            },
+          });
+          if (rRes.aborted || isTaskAborted(taskId)) {
+            return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+          }
           if (rRes.code !== 0) {
             return { success: false, status: "rife_failed", error: (rRes.stderr || "RIFE Vulkan interpolation failed").slice(-500) };
           }
@@ -1050,6 +1198,7 @@ export async function upscaleAiTask({
         currentFramesDir = framesRife;
       }
 
+      if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
       const segOut = path.join(outSegDir, `out_${i}.mp4`);
       const vfList = [];
       if (denoise) vfList.push("hqdn3d=1.1:1.1:3.5:3.5");
@@ -1068,7 +1217,11 @@ export async function upscaleAiTask({
         bitrateMbps: needsRife ? 42 : 35,
         quality,
         outputPath: segOut,
+        taskId,
       });
+      if (segEnc.aborted || isTaskAborted(taskId)) {
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
       if (!segEnc.ok) {
         return { success: false, status: "encode_failed", error: segEnc.error };
       }
@@ -1080,6 +1233,7 @@ export async function upscaleAiTask({
       }
     }
 
+    if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
     const listPath = path.join(workDir, "concat.txt");
     fs.writeFileSync(listPath, concatList.join("\n"));
     const outputFile = `${taskId}.mp4`;
@@ -1088,7 +1242,11 @@ export async function upscaleAiTask({
       "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", listPath,
       "-i", stagedInput, "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-shortest", "-movflags", "+faststart",
       outputPath,
-    ]);
+    ], { taskId });
+    if (muxRes.aborted || isTaskAborted(taskId)) {
+      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+      return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+    }
     if (muxRes.code !== 0 || !fs.existsSync(outputPath)) {
       return { success: false, status: "mux_failed", error: muxRes.stderr.slice(-500) };
     }
@@ -1117,6 +1275,7 @@ export async function upscaleAiTask({
       providers: getCompanionStatus(),
     };
   } finally {
+    unregisterTask(taskId);
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 }
