@@ -65,6 +65,12 @@
         const label = dh.hardwareAccelerated ? `NVENC :3370 (${dh.preferredCodec})` : (dh.ffmpegAvailable ? 'Daemon :3370' : 'Daemon :3370 (UI)');
         el.className = 'cap-chip on';
         el.textContent = `● ${label}`;
+        if (dh.neuralAvailable && !$('capEsrgan')) {
+          row.insertAdjacentHTML('beforeend', chip('Real-ESRGAN Vulkan', true, 'id="capEsrgan"'));
+        }
+        if (dh.rifeAvailable && !$('capRife')) {
+          row.insertAdjacentHTML('beforeend', chip('RIFE v4.6 2×FPS', true, 'id="capRife"'));
+        }
         if (gpuBtn && dh.ffmpegAvailable) gpuBtn.disabled = false;
         if ($('stageEncoderBadge')) {
           $('stageEncoderBadge').textContent = dh.hardwareAccelerated ? dh.preferredCodec.toUpperCase() : 'FFMPEG';
@@ -914,11 +920,15 @@
 
     try {
       const profileObj = (window.KapturaUpskaletor.PROFILES && window.KapturaUpskaletor.PROFILES[profile]) || {};
+      const pipe = profileObj.pipeline || (profileObj.ai ? 'esrgan' : 'lanczos');
+      const hasNeural = Boolean(window.KapturaDaemon && typeof window.KapturaDaemon.isNeuralAvailable === 'function' && window.KapturaDaemon.isNeuralAvailable());
+      const hasRife = Boolean(window.KapturaDaemon && typeof window.KapturaDaemon.isRifeAvailable === 'function' && window.KapturaDaemon.isRifeAvailable());
+      const canAiDaemon = pipe === 'rife' ? hasRife : (pipe === 'hybrid' ? (hasNeural && hasRife) : hasNeural);
       const canPassRemote = Boolean(
         activeSrc.remoteUrl &&
         window.KapturaDaemon &&
         window.KapturaDaemon.isReadyForTranscode() &&
-        (!profileObj.ai || (typeof window.KapturaDaemon.isNeuralAvailable === 'function' && window.KapturaDaemon.isNeuralAvailable()))
+        (!profileObj.ai || canAiDaemon)
       );
       const fileObj = canPassRemote
         ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
@@ -945,17 +955,23 @@
         status.textContent = '↗ Handoff a UPSKALETOR: master entregado + comando copiado.';
         toast(result.reason, 'notice', 9000);
       } else {
-        const name = `${baseName(fileObj.name)}_UPSKALED_${result.width || 'HD'}x${result.height || 'HD'}.${result.ext}`;
+        const resTag = result.width && result.height ? `${result.width}x${result.height}` : (result.pipeline === 'rife' ? 'RIFE_2xFPS' : 'HD');
+        const labelTag = result.width && result.height ? `${result.width}×${result.height}` : (result.pipeline === 'rife' ? '2× FPS' : '');
+        const name = `${baseName(fileObj.name)}_UPSKALED_${resTag}.${result.ext}`;
         upResultBlob = result.blob;
         const sizeMB = (result.blob.size / (1024 * 1024)).toFixed(2);
         setUpscaleDownloadReady(
           true,
           name,
-          `⬇ DESCARGAR ${result.width || ''}×${result.height || ''} (${sizeMB} MB)`,
+          `⬇ DESCARGAR ${labelTag} (${sizeMB} MB)`,
           (e) => { e.preventDefault(); downloadBlob(upResultBlob, name); }
         );
+        const it = result.integrity;
+        const itText = it && it.srcFps && it.outFps
+          ? ` · FPS: ${it.srcFps}→${it.outFps} · Drift: ${it.durationDriftMs ?? 0}ms${it.audioPreserved ? ' · Audio OK' : ''}`
+          : '';
         if ($('upskaletorReadout')) {
-          $('upskaletorReadout').textContent = `ARCHIVO LISTO: ${name} · ${sizeMB} MB · Motor: ${result.scaleMode}`;
+          $('upskaletorReadout').textContent = `ARCHIVO LISTO: ${name} · ${sizeMB} MB · Motor: ${result.scaleMode}${itText}`;
         }
         if ($('upskaletorResult')) $('upskaletorResult').style.display = 'block';
         if (window.KapturaComparator && $('upskaletorCompareBox')) {
@@ -968,14 +984,17 @@
             afterSrc: aSrc.url,
             isVideo: !result.isImage,
             beforeLabel: 'ORIGINAL',
-            afterLabel: `UPSKALED ${result.width || ''}×${result.height || ''}`,
+            afterLabel: result.pipeline === 'rife' ? 'RIFE 2× FPS' : 'UPSKALED',
+            integrity: result.integrity || null,
+            engineLabel: result.scaleMode || '',
+            isRife: result.pipeline === 'rife' || result.pipeline === 'hybrid',
           });
         }
         downloadBlob(result.blob, name);
         await saveToVault({ blob: result.blob, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: result.blob.size });
         if (result.fellBack) toast('MP4 no disponible; guardado WebM real.', 'notice');
-        status.textContent = `✅ Escalado real ${result.width}×${result.height} (${result.scaleMode}).`;
-        toast(`Upscale real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');
+        status.textContent = `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;
+        toast(`Proceso real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');
       }
     } catch (e) { status.textContent = ''; toast(e.message || String(e), 'error'); }
     finally { $('btnUpscaleNow').disabled = false; setTimeout(() => setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', 0), 800); }

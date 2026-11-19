@@ -61,6 +61,7 @@ export function detectVideoBackend(forceRefresh = false) {
       available: false,
       ffmpegPath: null,
       encoders: { nvencH264: false, nvencHevc: false, nvencAv1: false, amfH264: false, qsvH264: false, libx264: false, vp9: false },
+      filters: { cas: false, psnr: false, ssim: false, libvmaf: false, minterpolate: false },
       preferredCodec: null,
       hardwareAccelerated: false,
     };
@@ -68,6 +69,7 @@ export function detectVideoBackend(forceRefresh = false) {
   }
 
   let encoderText = "";
+  let filterText = "";
   try {
     encoderText = execFileSync(ffmpegPath, ["-hide_banner", "-encoders"], {
       encoding: "utf8",
@@ -76,6 +78,15 @@ export function detectVideoBackend(forceRefresh = false) {
     });
   } catch {
     encoderText = "";
+  }
+  try {
+    filterText = execFileSync(ffmpegPath, ["-hide_banner", "-filters"], {
+      encoding: "utf8",
+      timeout: 3000,
+      windowsHide: true,
+    });
+  } catch {
+    filterText = "";
   }
 
   const encoders = {
@@ -86,6 +97,14 @@ export function detectVideoBackend(forceRefresh = false) {
     qsvH264: encoderText.includes("h264_qsv"),
     libx264: encoderText.includes("libx264"),
     vp9: encoderText.includes("libvpx-vp9"),
+  };
+
+  const filters = {
+    cas: /\bcas\b/.test(filterText),
+    psnr: /\bpsnr\b/.test(filterText),
+    ssim: /\bssim\b/.test(filterText),
+    libvmaf: /\blibvmaf\b/.test(filterText),
+    minterpolate: /\bminterpolate\b/.test(filterText),
   };
 
   let preferredCodec = "mpeg4";
@@ -107,6 +126,7 @@ export function detectVideoBackend(forceRefresh = false) {
     available: true,
     ffmpegPath,
     encoders,
+    filters,
     preferredCodec,
     hardwareAccelerated,
   };

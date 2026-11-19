@@ -51,7 +51,9 @@ async function run() {
     assert.equal(health.online, true);
     assert.equal(health.port, port);
     assert.equal(typeof health.capabilities.neuralAvailable, "boolean", "Daemon /health must report neuralAvailable capability");
+    assert.equal(typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
     assert.equal(typeof health.providers.realEsrgan, "boolean", "Daemon /health must report realEsrgan provider availability");
+    assert.equal(typeof health.providers.rife, "boolean", "Daemon /health must report rife provider availability");
 
     const statusRes = await httpRequest(port, "/status");
     assert.equal(statusRes.status, 200);
@@ -150,6 +152,8 @@ async function run() {
       );
       assert.equal(txRes.status, 200);
       assert.ok(txRes.body.length > 500, "Transcoded stream with sharpen+CFR must be non-empty MP4");
+      assert.equal(txRes.headers["x-kaptura-out-res"], "160x90", "Transcode response must expose forensic X-Kaptura-Out-Res");
+      assert.ok(txRes.headers["x-kaptura-elapsed-ms"] !== undefined, "Transcode response must expose X-Kaptura-Elapsed-Ms");
 
       if (!health.capabilities.neuralAvailable) {
         const aiGuardRes = await httpRequest(
@@ -184,6 +188,37 @@ async function run() {
         assert.equal(aiOkRes.status, 200, "POST /upscale-ai must succeed with real PNG output when neuralAvailable is true");
         assert.equal(aiOkRes.body.subarray(0, 4).toString("hex"), "89504e47", "Neural output must be a valid PNG");
         assert.ok(aiOkRes.body.length > tinyPng.length, "4x neural output PNG must be larger than 4x4 input PNG");
+      }
+
+      if (!health.capabilities.rifeAvailable) {
+        const rifeGuardRes = await httpRequest(
+          port,
+          "/upscale-ai",
+          "POST",
+          { "X-Kaptura-Ext": ".mp4", "X-Kaptura-Pipeline": "rife" },
+          srcBuf
+        );
+        assert.equal(rifeGuardRes.status, 422, "POST /upscale-ai RIFE must return 422 when rife-ncnn-vulkan is absent");
+        const rifeGuardJson = JSON.parse(rifeGuardRes.body.toString("utf8"));
+        assert.equal(rifeGuardJson.status, "rife_unavailable");
+      } else {
+        const rifeOkRes = await httpRequest(
+          port,
+          "/upscale-ai?download=1",
+          "POST",
+          {
+            "Accept": "application/octet-stream",
+            "X-Kaptura-Ext": ".mp4",
+            "X-Kaptura-Pipeline": "rife",
+            "X-Kaptura-Rife-Mult": "2",
+            "X-Kaptura-Quality": "fast",
+          },
+          srcBuf
+        );
+        assert.equal(rifeOkRes.status, 200, "POST /upscale-ai RIFE 2x must succeed when rifeAvailable is true");
+        assert.ok(rifeOkRes.body.length > 500, "RIFE 2x MP4 must be non-empty");
+        assert.equal(rifeOkRes.headers["x-kaptura-pipeline"], "rife");
+        assert.ok(Number(rifeOkRes.headers["x-kaptura-out-fps"]) >= 25, "RIFE 2x output FPS must double from ~15fps");
       }
 
       // Test WebSocket /ws/capture streaming pipe-media mode

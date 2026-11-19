@@ -70,6 +70,25 @@ const vidCmd = Upskaletor.command('clip.mp4', '4k_ai', 'ai');
 check('Upskaletor video handoff command targets .mp4', vidCmd.includes('.mp4') && vidCmd.includes('_UPSKALED.mp4'));
 const casCmd = Upskaletor.command('clip.mp4', '2k_cas', 'auto');
 check('Upskaletor 2k_cas command emits Lanczos 2560x1440', casCmd.includes('-Mode Lanczos') && casCmd.includes('-Width 2560') && casCmd.includes('-Height 1440'));
+check('Upskaletor has rife_2x profile', Boolean(Upskaletor.PROFILES['rife_2x']) && Upskaletor.PROFILES['rife_2x'].pipeline === 'rife');
+check('Upskaletor has hybrid_4k_rife profile', Boolean(Upskaletor.PROFILES['hybrid_4k_rife']) && Upskaletor.PROFILES['hybrid_4k_rife'].pipeline === 'hybrid');
+
+const Comparator = require(p('comparator.js'));
+console.log('\n--- FORENSIC OPTICAL INSPECTOR (SOBEL + DELTA) ---');
+check('Comparator exports computeSobelAndDelta', typeof Comparator.computeSobelAndDelta === 'function');
+const cw = 8, ch = 8;
+const flatBuf = new Uint8Array(cw * ch * 4).fill(128);
+const sharpBuf = new Uint8Array(cw * ch * 4);
+for (let y = 0; y < ch; y++) {
+  for (let x = 0; x < cw; x++) {
+    const i = y * cw + x;
+    const v = (x < 4) ? 16 : 240;
+    sharpBuf[i * 4] = v; sharpBuf[i * 4 + 1] = v; sharpBuf[i * 4 + 2] = v; sharpBuf[i * 4 + 3] = 255;
+  }
+}
+const mRes = Comparator.computeSobelAndDelta(flatBuf, sharpBuf, cw, ch, null);
+check('Sobel edge energy detects high-frequency sharpening gain', mRes.avgEdgeAfter > mRes.avgEdgeBefore);
+check('Mean RGB delta is non-zero between blurred and sharp images', mRes.meanDelta > 10);
 
 if (failures) {
   console.error(`\nTESTS FAILED (${failures})`);

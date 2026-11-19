@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { detectVideoBackend, getOptimalGpuEncoderParams } from "./gpuDirectOptimizer.mjs";
-import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, runUpskaletor } from "../providers/adapters.mjs";
+import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, resolveRifeExecutable, runUpskaletor } from "../providers/adapters.mjs";
 
 const ALLOWED_INPUT_EXTS = new Set([".webm", ".mp4", ".mov", ".mkv", ".avi", ".gif", ".png", ".jpg", ".jpeg", ".webp"]);
 
@@ -105,14 +105,53 @@ async function probeDurationSec(ffmpegPath, inputPath) {
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
 }
 
-async function probeMediaMeta(ffmpegPath, inputPath) {
+export async function probeMediaMeta(ffmpegPath, inputPath) {
   const res = await runFfmpegArgs(ffmpegPath, ["-hide_banner", "-i", inputPath]);
   const durM = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(res.stderr);
   const fpsM = /,\s*(\d+(?:\.\d+)?)\s*(?:fps|tbr)\b/.exec(res.stderr);
+  const dimM = /Stream #[^\n]*?Video:[^\n]*?,\s*(\d{2,5})x(\d{2,5})\b/.exec(res.stderr);
+  const audM = /Stream #[^\n]*?Audio:\s*([a-zA-Z0-9_]+)/.exec(res.stderr);
   const duration = durM ? (Number(durM[1]) * 3600 + Number(durM[2]) * 60 + Number(durM[3])) : 0;
   const rawFps = fpsM ? Number(fpsM[1]) : 30;
-  const fps = Number.isFinite(rawFps) && rawFps >= 5 && rawFps <= 120 ? rawFps : 30;
-  return { duration, fps };
+  const fps = Number.isFinite(rawFps) && rawFps >= 5 && rawFps <= 240 ? rawFps : 30;
+  const width = dimM ? Number(dimM[1]) : 0;
+  const height = dimM ? Number(dimM[2]) : 0;
+  return {
+    duration,
+    fps,
+    width,
+    height,
+    hasAudio: Boolean(audM),
+    audioCodec: audM ? audM[1] : null,
+  };
+}
+
+function buildIntegrityReceipt(srcMeta, outMeta, elapsedMs, expectedFpsRatio = 1) {
+  const targetFps = (srcMeta.fps || 30) * expectedFpsRatio;
+  const fpsDriftPct = targetFps > 0 && outMeta.fps > 0
+    ? Number((((Math.abs(outMeta.fps - targetFps)) / targetFps) * 100).toFixed(2))
+    : 0;
+  const durationDriftMs = srcMeta.duration > 0 && outMeta.duration > 0
+    ? Math.round(Math.abs(outMeta.duration - srcMeta.duration) * 1000)
+    : 0;
+  const pixelMultiplier = srcMeta.width > 0 && outMeta.width > 0
+    ? Number(((outMeta.width * outMeta.height) / (srcMeta.width * srcMeta.height)).toFixed(2))
+    : 1;
+  return {
+    srcWidth: srcMeta.width || 0,
+    srcHeight: srcMeta.height || 0,
+    outWidth: outMeta.width || 0,
+    outHeight: outMeta.height || 0,
+    srcFps: srcMeta.fps || 0,
+    outFps: outMeta.fps || 0,
+    fpsDriftPct,
+    durationDriftMs,
+    hasSrcAudio: Boolean(srcMeta.hasAudio),
+    audioPreserved: srcMeta.hasAudio ? Boolean(outMeta.hasAudio) : null,
+    audioCodec: outMeta.audioCodec || null,
+    pixelMultiplier,
+    elapsedMs: Math.round(elapsedMs || 0),
+  };
 }
 
 function escapeDrawtext(text) {
@@ -279,11 +318,13 @@ export async function transcodeMediaTask({
       return { success: false, status: "empty_input", error: "Input media file is empty (0 bytes)." };
     }
 
+    const t0 = Date.now();
     if (typeof onProgress === "function") onProgress({ taskId, stage: "PROBING", progress: 5 });
 
     const trimStart = Math.max(0, Number(startSec) || 0);
     const trimEnd = Number(endSec) > trimStart ? Number(endSec) : 0;
-    const probedDur = await probeDurationSec(backend.ffmpegPath, stagedInput);
+    const srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    const probedDur = srcMeta.duration;
     const effectiveDur = trimEnd > 0
       ? Math.max(0.2, trimEnd - trimStart)
       : Math.max(0.2, probedDur > 0 ? Math.max(0.2, probedDur - trimStart) : 5);
@@ -310,8 +351,13 @@ export async function transcodeMediaTask({
     }
     const sharpNum = Number(sharpen) || 0;
     if (sharpNum > 0) {
-      const amt = Math.min(1.5, Math.max(0.25, sharpNum * 1.4)).toFixed(2);
-      filters.push(`unsharp=5:5:${amt}:5:5:0.0`);
+      if (backend.filters && backend.filters.cas) {
+        const casStr = Math.min(1.0, Math.max(0.15, sharpNum)).toFixed(2);
+        filters.push(`cas=strength=${casStr}`);
+      } else {
+        const amt = Math.min(1.5, Math.max(0.25, sharpNum * 1.4)).toFixed(2);
+        filters.push(`unsharp=5:5:${amt}:5:5:0.0`);
+      }
     }
     if (textOverlay) {
       const ttf = resolveFontTtfPath();
@@ -346,7 +392,14 @@ export async function transcodeMediaTask({
     }
 
     const stat = fs.statSync(outputPath);
-    const outDuration = await probeDurationSec(backend.ffmpegPath, outputPath);
+    const outMeta = await probeMediaMeta(backend.ffmpegPath, outputPath);
+    const elapsedMs = Date.now() - t0;
+    const integrity = buildIntegrityReceipt(
+      trimEnd > 0 ? { ...srcMeta, duration: effectiveDur } : srcMeta,
+      outMeta,
+      elapsedMs,
+      1
+    );
     if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
     return {
       success: true,
@@ -355,10 +408,15 @@ export async function transcodeMediaTask({
       outputFile,
       videoPath: outputPath,
       sizeBytes: stat.size,
-      duration: outDuration || effectiveDur,
+      duration: outMeta.duration || effectiveDur,
+      width: outMeta.width || (width ? evenDim(width) : srcMeta.width),
+      height: outMeta.height || (height ? evenDim(height) : srcMeta.height),
+      fps: outMeta.fps || srcMeta.fps,
       codec: encRes.codec,
+      sharpenFilter: sharpNum > 0 ? (backend.filters && backend.filters.cas ? "cas" : "unsharp") : null,
       hardwareAccelerated: encRes.hardwareAccelerated,
       fallbackCpu: encRes.fallbackCpu,
+      integrity,
       providers: getCompanionStatus(),
     };
   } finally {
@@ -773,15 +831,18 @@ function resolveNeuralModelName(requestedModel, modelsDir, scale) {
 }
 
 /**
- * Neural super-resolution & restoration via Real-ESRGAN NCNN Vulkan (never faked if absent).
+ * Neural super-resolution (Real-ESRGAN) & motion interpolation (RIFE v4.6) via NCNN Vulkan.
  */
 export async function upscaleAiTask({
   inputPath = "",
   inputBuffer = null,
   inputExt = ".mp4",
   outputDir = path.resolve(process.cwd(), "exports"),
+  pipeline = "esrgan",
   model = "realesrgan-x4plus",
   scale = 4,
+  rifeMult = 2,
+  rifeModel = "rife-v4.6",
   width = 0,
   height = 0,
   denoise = false,
@@ -796,8 +857,16 @@ export async function upscaleAiTask({
     return { success: false, status: "empty_input", error: "Empty media buffer (0 bytes)." };
   }
 
+  const mode = ["esrgan", "rife", "hybrid"].includes(String(pipeline).toLowerCase())
+    ? String(pipeline).toLowerCase()
+    : "esrgan";
+  const needsEsrgan = mode === "esrgan" || mode === "hybrid";
+  const needsRife = mode === "rife" || mode === "hybrid";
+
   const realEsrganPath = resolveRealEsrganExecutable();
-  if (!realEsrganPath) {
+  const rifePath = resolveRifeExecutable();
+
+  if (needsEsrgan && !realEsrganPath) {
     return {
       success: false,
       status: "realesrgan_unavailable",
@@ -805,10 +874,19 @@ export async function upscaleAiTask({
       providers: getCompanionStatus(),
     };
   }
+  if (needsRife && !rifePath) {
+    return {
+      success: false,
+      status: "rife_unavailable",
+      error: "rife-ncnn-vulkan binary not detected on host (PATH / ETHERNIUM_RIFE_PATH / UPSKALETOR).",
+      providers: getCompanionStatus(),
+    };
+  }
 
+  const t0 = Date.now();
   fs.mkdirSync(outputDir, { recursive: true });
   pruneOldExports(outputDir);
-  const taskId = providedTaskId || `ai_${Date.now()}`;
+  const taskId = providedTaskId || `${mode}_${Date.now()}`;
   const cleanExt = ALLOWED_INPUT_EXTS.has(inputExt.toLowerCase()) ? inputExt.toLowerCase() : ".mp4";
   const isImage = IMAGE_AI_EXTS.has(cleanExt);
   const workDir = path.join(outputDir, `.tmp_${taskId}`);
@@ -829,11 +907,15 @@ export async function upscaleAiTask({
 
     const backend = detectVideoBackend();
     const safeScale = scale === 2 || scale === 3 ? scale : 4;
-    const binDir = path.dirname(realEsrganPath);
-    const modelsDir = path.join(binDir, "models");
-    const activeModel = resolveNeuralModelName(model, modelsDir, safeScale);
+    const safeMult = Math.max(2, Math.min(4, Math.round(Number(rifeMult) || 2)));
 
     if (isImage) {
+      if (!realEsrganPath) {
+        return { success: false, status: "invalid_mode_for_image", error: "RIFE frame interpolation only applies to video." };
+      }
+      const binDir = path.dirname(realEsrganPath);
+      const modelsDir = path.join(binDir, "models");
+      const activeModel = resolveNeuralModelName(model, modelsDir, safeScale);
       if (typeof onProgress === "function") onProgress({ taskId, stage: "NEURAL_INFER", progress: 25 });
       const rawOut = path.join(workDir, "neural_out.png");
       const finalOut = `${taskId}.png`;
@@ -853,17 +935,23 @@ export async function upscaleAiTask({
       }
 
       const stat = fs.statSync(finalPath);
+      const outMeta = backend.available && backend.ffmpegPath ? await probeMediaMeta(backend.ffmpegPath, finalPath) : { width, height, fps: 0, duration: 0 };
+      const elapsedMs = Date.now() - t0;
       if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
       return {
         success: true,
         status: "completed",
         taskId,
+        pipeline: mode,
         outputFile: finalOut,
         videoPath: finalPath,
         sizeBytes: stat.size,
+        width: outMeta.width || width,
+        height: outMeta.height || height,
         model: activeModel,
         neural: true,
         hardwareAccelerated: true,
+        integrity: { elapsedMs },
         providers: getCompanionStatus(),
       };
     }
@@ -873,15 +961,28 @@ export async function upscaleAiTask({
     }
 
     if (typeof onProgress === "function") onProgress({ taskId, stage: "SEGMENT_PREP", progress: 8 });
-    const mediaMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
-    const probedDur = Math.max(0.2, mediaMeta.duration);
-    const sourceFps = mediaMeta.fps || 30;
+    const srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    const probedDur = Math.max(0.2, srcMeta.duration);
+    const sourceFps = srcMeta.fps || 30;
+    const expectedFpsRatio = needsRife ? safeMult : 1;
+    const targetFps = Math.round(sourceFps * expectedFpsRatio * 1000) / 1000;
+
+    const esrganBinDir = realEsrganPath ? path.dirname(realEsrganPath) : "";
+    const esrganModelsDir = esrganBinDir ? path.join(esrganBinDir, "models") : "";
+    const activeModel = needsEsrgan ? resolveNeuralModelName(model, esrganModelsDir, safeScale) : rifeModel;
+
+    const rifeBinDir = rifePath ? path.dirname(rifePath) : "";
+    let resolvedRifeModelDir = rifeModel;
+    if (needsRife && rifeBinDir) {
+      const candidateDir = path.join(rifeBinDir, rifeModel);
+      if (fs.existsSync(candidateDir)) resolvedRifeModelDir = candidateDir;
+    }
+
     const segDir = path.join(workDir, "segments");
     const outSegDir = path.join(workDir, "out_segments");
     fs.mkdirSync(segDir, { recursive: true });
     fs.mkdirSync(outSegDir, { recursive: true });
 
-    // Segment video into 4-second chunks so frame extraction stays bounded on disk
     const segRes = await runFfmpegArgs(backend.ffmpegPath, [
       "-hide_banner", "-y", "-i", stagedInput,
       "-c:v", "copy", "-an", "-f", "segment", "-segment_time", "4", "-reset_timestamps", "1",
@@ -899,9 +1000,7 @@ export async function upscaleAiTask({
     for (let i = 0; i < segFiles.length; i++) {
       const segIn = path.join(segDir, segFiles[i]);
       const framesIn = path.join(workDir, `f_in_${i}`);
-      const framesOut = path.join(workDir, `f_out_${i}`);
       fs.mkdirSync(framesIn, { recursive: true });
-      fs.mkdirSync(framesOut, { recursive: true });
 
       const exRes = await runFfmpegArgs(backend.ffmpegPath, [
         "-hide_banner", "-y", "-i", segIn, path.join(framesIn, "f_%06d.png"),
@@ -910,11 +1009,45 @@ export async function upscaleAiTask({
         return { success: false, status: "extract_failed", error: exRes.stderr.slice(-500) };
       }
 
-      const aiRes = await runProcessArgs(realEsrganPath, [
-        "-i", framesIn, "-o", framesOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png",
-      ], binDir);
-      if (aiRes.code !== 0) {
-        return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
+      let currentFramesDir = framesIn;
+      let inputPattern = "f_%06d.png";
+      let startNumber = 1;
+
+      if (needsEsrgan) {
+        const framesSr = path.join(workDir, `f_sr_${i}`);
+        fs.mkdirSync(framesSr, { recursive: true });
+        const aiRes = await runProcessArgs(realEsrganPath, [
+          "-i", currentFramesDir, "-o", framesSr, "-m", esrganModelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png",
+        ], esrganBinDir);
+        if (aiRes.code !== 0) {
+          return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
+        }
+        fs.rmSync(currentFramesDir, { recursive: true, force: true });
+        currentFramesDir = framesSr;
+      }
+
+      if (needsRife) {
+        const framesRife = path.join(workDir, `f_rife_${i}`);
+        fs.mkdirSync(framesRife, { recursive: true });
+        const inPngs = fs.readdirSync(currentFramesDir).filter((f) => f.endsWith(".png")).sort();
+        if (inPngs.length >= 2) {
+          const targetCount = inPngs.length * safeMult;
+          const rRes = await runProcessArgs(rifePath, [
+            "-i", currentFramesDir, "-o", framesRife, "-m", resolvedRifeModelDir, "-n", String(targetCount), "-f", "%08d.png",
+          ], rifeBinDir);
+          if (rRes.code !== 0) {
+            return { success: false, status: "rife_failed", error: (rRes.stderr || "RIFE Vulkan interpolation failed").slice(-500) };
+          }
+          inputPattern = "%08d.png";
+          startNumber = 1;
+        } else if (inPngs.length === 1) {
+          fs.copyFileSync(path.join(currentFramesDir, inPngs[0]), path.join(framesRife, "00000001.png"));
+          fs.copyFileSync(path.join(currentFramesDir, inPngs[0]), path.join(framesRife, "00000002.png"));
+          inputPattern = "%08d.png";
+          startNumber = 1;
+        }
+        fs.rmSync(currentFramesDir, { recursive: true, force: true });
+        currentFramesDir = framesRife;
       }
 
       const segOut = path.join(outSegDir, `out_${i}.mp4`);
@@ -924,14 +1057,15 @@ export async function upscaleAiTask({
         vfList.push(height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`);
       }
       const segEncArgs = [
-        "-hide_banner", "-y", "-framerate", String(sourceFps), "-i", path.join(framesOut, "f_%06d.png"),
+        "-hide_banner", "-y", "-start_number", String(startNumber), "-framerate", String(targetFps),
+        "-i", path.join(currentFramesDir, inputPattern), "-fps_mode", "cfr",
       ];
       if (vfList.length > 0) segEncArgs.push("-vf", vfList.join(","));
       const segEnc = await encodeWithSafeFallback({
         ffmpegPath: backend.ffmpegPath,
         preArgs: segEncArgs,
         container: "mp4",
-        bitrateMbps: 35,
+        bitrateMbps: needsRife ? 42 : 35,
         quality,
         outputPath: segOut,
       });
@@ -939,11 +1073,10 @@ export async function upscaleAiTask({
         return { success: false, status: "encode_failed", error: segEnc.error };
       }
       concatList.push(`file '${segOut.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`);
-      fs.rmSync(framesIn, { recursive: true, force: true });
-      fs.rmSync(framesOut, { recursive: true, force: true });
+      fs.rmSync(currentFramesDir, { recursive: true, force: true });
 
       if (typeof onProgress === "function") {
-        onProgress({ taskId, stage: "NEURAL_SEGMENT", progress: Math.min(92, Math.round(12 + ((i + 1) / segFiles.length) * 80)) });
+        onProgress({ taskId, stage: `${mode.toUpperCase()}_SEGMENT`, progress: Math.min(92, Math.round(12 + ((i + 1) / segFiles.length) * 80)) });
       }
     }
 
@@ -961,21 +1094,75 @@ export async function upscaleAiTask({
     }
 
     const stat = fs.statSync(outputPath);
+    const outMeta = await probeMediaMeta(backend.ffmpegPath, outputPath);
+    const elapsedMs = Date.now() - t0;
+    const integrity = buildIntegrityReceipt(srcMeta, outMeta, elapsedMs, expectedFpsRatio);
     if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
     return {
       success: true,
       status: "completed",
       taskId,
+      pipeline: mode,
       outputFile,
       videoPath: outputPath,
       sizeBytes: stat.size,
-      duration: probedDur,
-      model: activeModel,
+      duration: outMeta.duration || probedDur,
+      width: outMeta.width || width,
+      height: outMeta.height || height,
+      fps: outMeta.fps || targetFps,
+      model: mode === "hybrid" ? `${activeModel}+${rifeModel}` : activeModel,
       neural: true,
       hardwareAccelerated: true,
+      integrity,
       providers: getCompanionStatus(),
     };
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Compute objective FFmpeg quality metrics (PSNR dB, SSIM, optional VMAF) against a Ground-Truth reference.
+ */
+export async function measureQualityMetrics(ffmpegPath, refPath, distPath, { useVmaf = false } = {}) {
+  const refMeta = await probeMediaMeta(ffmpegPath, refPath);
+  const w = evenDim(refMeta.width || 1280);
+  const h = evenDim(refMeta.height || 720);
+  const fps = Math.max(5, refMeta.fps || 30);
+
+  const ssimArgs = [
+    "-hide_banner", "-i", distPath, "-i", refPath,
+    "-lavfi", `[0:v]fps=${fps},scale=${w}:${h}:flags=bicubic,setpts=PTS-STARTPTS[dist];[1:v]fps=${fps},setpts=PTS-STARTPTS[ref];[dist][ref]ssim=stats_file=-`,
+    "-f", "null", "-",
+  ];
+  const psnrArgs = [
+    "-hide_banner", "-i", distPath, "-i", refPath,
+    "-lavfi", `[0:v]fps=${fps},scale=${w}:${h}:flags=bicubic,setpts=PTS-STARTPTS[dist];[1:v]fps=${fps},setpts=PTS-STARTPTS[ref];[dist][ref]psnr=stats_file=-`,
+    "-f", "null", "-",
+  ];
+
+  const [ssimRes, psnrRes] = await Promise.all([
+    runFfmpegArgs(ffmpegPath, ssimArgs),
+    runFfmpegArgs(ffmpegPath, psnrArgs),
+  ]);
+
+  const ssimM = /SSIM[^\n]*All:(\d+(?:\.\d+)?)/.exec(ssimRes.stderr);
+  const psnrM = /PSNR[^\n]*average:(\d+(?:\.\d+)?)/.exec(psnrRes.stderr);
+  let vmaf = null;
+
+  if (useVmaf) {
+    const vmafRes = await runFfmpegArgs(ffmpegPath, [
+      "-hide_banner", "-i", distPath, "-i", refPath,
+      "-lavfi", `[0:v]fps=${fps},scale=${w}:${h}:flags=bicubic,setpts=PTS-STARTPTS[dist];[1:v]fps=${fps},setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf`,
+      "-f", "null", "-",
+    ]);
+    const vmafM = /VMAF score:\s*(\d+(?:\.\d+)?)/.exec(vmafRes.stderr);
+    if (vmafM) vmaf = Number(vmafM[1]);
+  }
+
+  return {
+    psnrDb: psnrM ? Number(psnrM[1]) : null,
+    ssim: ssimM ? Number(ssimM[1]) : null,
+    vmaf,
+  };
 }

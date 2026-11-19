@@ -12,6 +12,7 @@
     "test:timing": "node tests/test_timing.js",
     "test:daemon": "node tests/test_daemon_ebwp.mjs",
     "validate": "python tests/validate_kaptura.py",
+    "benchmark": "node scripts/benchmark_upskaletor.mjs",
     "serve": "python -m http.server 8000"
   },
   "keywords": ["screen-recorder", "transcoder", "lanczos", "gif-encoder", "webgl", "local-first", "ethernium"],

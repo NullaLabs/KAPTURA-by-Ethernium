@@ -23,9 +23,11 @@
   const PROFILES = {
     '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', ai: false, w: 2560, h: 1440, sharpen: 0.65, cfr: true, bitrate: 24 },
     '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', ai: false, w: 3840, h: 2160, sharpen: 0.72, cfr: true, bitrate: 45 },
-    '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', ai: true,  w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
-    'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', ai: true, w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
-    'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', ai: true, w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
+    '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
+    'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
+    'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
+    'rife_2x':        { label: 'RIFE v4.6 · Interpolación Neural 2× FPS', ai: true, pipeline: 'rife', rifeMult: 2, w: 0, h: 0 },
+    'hybrid_4k_rife': { label: 'HYBRID ULTRA · Real-ESRGAN 4K + RIFE 2× FPS', ai: true, pipeline: 'hybrid', model: 'realesrgan-x4plus', scale: 4, rifeMult: 2, w: 3840, h: 2160 },
     '4k_lanczos':     { label: '4K UHD · Lanczos-3 (in-browser)', ai: false, w: 3840, h: 2160, bitrate: 40 },
     '1080p_lanczos':  { label: '1080p · Lanczos-3 (in-browser)', ai: false, w: 1920, h: 1080, bitrate: 16 },
     '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 2, sharpen: 0.35 },
@@ -84,11 +86,21 @@
     const isImg = isImageFile(file);
 
     if (profile.ai) {
-      if (!opts.forceHandoff && root.KapturaDaemon && typeof root.KapturaDaemon.isNeuralAvailable === 'function' && root.KapturaDaemon.isNeuralAvailable()) {
+      const pipe = profile.pipeline || 'esrgan';
+      const hasNeural = Boolean(root.KapturaDaemon && typeof root.KapturaDaemon.isNeuralAvailable === 'function' && root.KapturaDaemon.isNeuralAvailable());
+      const hasRife = Boolean(root.KapturaDaemon && typeof root.KapturaDaemon.isRifeAvailable === 'function' && root.KapturaDaemon.isRifeAvailable());
+      const canRun = !opts.forceHandoff && (
+        (pipe === 'rife' && hasRife) ||
+        (pipe === 'hybrid' && hasNeural && hasRife) ||
+        (pipe === 'esrgan' && hasNeural)
+      );
+      if (canRun) {
         try {
           const aiRes = await root.KapturaDaemon.upscaleAiViaDaemon(file, {
+            pipeline: pipe,
             model: profile.model || 'realesrgan-x4plus',
             scale: profile.scale || 4,
+            rifeMult: profile.rifeMult || 2,
             width: profile.w || 0,
             height: profile.h || 0,
             denoise: Boolean(profile.denoise),
@@ -100,9 +112,11 @@
               mode: 'processed',
               blob: aiRes.blob,
               ext: aiRes.ext,
-              width: aiRes.width || profile.w || 3840,
-              height: aiRes.height || profile.h || 2160,
+              pipeline: aiRes.pipeline || pipe,
+              width: aiRes.width || profile.w || 0,
+              height: aiRes.height || profile.h || 0,
               scaleMode: aiRes.scaleMode,
+              integrity: aiRes.integrity || null,
               fellBack: false,
               isImage: isImg,
               neural: true,
@@ -112,10 +126,12 @@
           // Fall through cleanly to honest handoff when neural daemon pass fails or binary missing
         }
       }
-      // Honest: when Real-ESRGAN Vulkan is unavailable locally, hand off cleanly without faking AI.
+      // Honest: when Real-ESRGAN / RIFE Vulkan is unavailable locally, hand off cleanly without faking AI.
       return {
         mode: 'handoff',
-        reason: 'El escalado neuronal Real-ESRGAN requiere realesrgan-ncnn-vulkan (no detectado en el host/daemon :3370). KAPTURA entrega el master sin alterarlo.',
+        reason: pipe === 'rife'
+          ? 'La interpolación neuronal RIFE v4.6 requiere rife-ncnn-vulkan (no detectado en el host/daemon :3370).'
+          : 'El escalado neuronal Real-ESRGAN requiere realesrgan-ncnn-vulkan (no detectado en el host/daemon :3370). KAPTURA entrega el master sin alterarlo.',
         command: command(fileName, profileKey, engine || 'ai'),
         fileName,
         isImage: isImg,
@@ -203,6 +219,7 @@
       width: result.width,
       height: result.height,
       scaleMode: result.scaleMode,
+      integrity: result.integrity || null,
       fellBack: result.fellBack,
       isImage: false,
     };

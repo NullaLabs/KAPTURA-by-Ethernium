@@ -38,6 +38,8 @@
         online: Boolean(data && data.online),
         ffmpegAvailable: Boolean(data && data.capabilities && data.capabilities.ffmpegAvailable),
         neuralAvailable: Boolean((data && data.capabilities && data.capabilities.neuralAvailable) || (data && data.providers && data.providers.realEsrgan)),
+        rifeAvailable: Boolean((data && data.capabilities && data.capabilities.rifeAvailable) || (data && data.providers && data.providers.rife)),
+        casFilter: Boolean(data && data.capabilities && data.capabilities.casFilter),
         preferredCodec: (data && data.capabilities && data.capabilities.preferredCodec) || null,
         hardwareAccelerated: Boolean(data && data.capabilities && data.capabilities.hardwareAccelerated),
         providers: (data && data.providers) || {},
@@ -59,6 +61,42 @@
 
   function isNeuralAvailable() {
     return Boolean(cachedHealth && cachedHealth.online && cachedHealth.neuralAvailable);
+  }
+
+  function isRifeAvailable() {
+    return Boolean(cachedHealth && cachedHealth.online && cachedHealth.rifeAvailable);
+  }
+
+  function parseIntegrityHeaders(res) {
+    if (!res || !res.headers) return null;
+    const srcRes = res.headers.get('X-Kaptura-Src-Res') || '';
+    const outRes = res.headers.get('X-Kaptura-Out-Res') || '';
+    const srcFps = Number(res.headers.get('X-Kaptura-Src-Fps') || 0);
+    const outFps = Number(res.headers.get('X-Kaptura-Out-Fps') || 0);
+    const fpsDriftRaw = res.headers.get('X-Kaptura-Fps-Drift-Pct');
+    const driftRaw = res.headers.get('X-Kaptura-Duration-Drift-Ms');
+    const audioRaw = res.headers.get('X-Kaptura-Audio-Preserved');
+    const audioCodec = res.headers.get('X-Kaptura-Audio-Codec') || '';
+    const elapsedRaw = res.headers.get('X-Kaptura-Elapsed-Ms');
+    if (!srcRes && !outRes && !srcFps && !outFps && !elapsedRaw) return null;
+    const [srcW, srcH] = srcRes.split('x').map((n) => Number(n) || 0);
+    const [outW, outH] = outRes.split('x').map((n) => Number(n) || 0);
+    const fpsDriftPct = fpsDriftRaw !== null
+      ? Number(fpsDriftRaw)
+      : (srcFps > 0 && outFps > 0 ? Number(((Math.abs(outFps - srcFps) / srcFps) * 100).toFixed(2)) : 0);
+    return {
+      srcWidth: srcW || 0,
+      srcHeight: srcH || 0,
+      outWidth: outW || 0,
+      outHeight: outH || 0,
+      srcFps,
+      outFps,
+      fpsDriftPct,
+      durationDriftMs: driftRaw !== null ? Number(driftRaw) : undefined,
+      audioPreserved: audioRaw === null ? null : audioRaw === 'true',
+      audioCodec,
+      elapsedMs: elapsedRaw !== null ? Number(elapsedRaw) : undefined,
+    };
   }
 
   function fileExt(name) {
@@ -144,11 +182,12 @@
           duration: data.duration || 0,
           ext: container,
           mime: container === 'webm' ? 'video/webm' : 'video/mp4',
-          width: opts.width || 0,
-          height: opts.height || 0,
+          width: data.width || opts.width || 0,
+          height: data.height || opts.height || 0,
           codec: data.codec || (container === 'webm' ? 'libvpx-vp9' : 'h264'),
           hardwareAccelerated: Boolean(data.hardwareAccelerated),
           scaleMode: `${data.hardwareAccelerated ? 'NVENC' : 'FFmpeg'} (${data.codec || 'h264'})`,
+          integrity: data.integrity || null,
           fellBack: false,
           viaDaemon: true,
         };
@@ -158,15 +197,17 @@
       if (typeof opts.onProgress === 'function') opts.onProgress(1, { taskId, stage: 'COMPLETE' });
       const codec = res.headers.get('X-Kaptura-Codec') || (container === 'webm' ? 'libvpx-vp9' : 'h264');
       const hw = res.headers.get('X-Kaptura-HW') === 'true';
+      const integrity = parseIntegrityHeaders(res);
       return {
         blob,
         ext: container,
         mime: container === 'webm' ? 'video/webm' : 'video/mp4',
-        width: opts.width || 0,
-        height: opts.height || 0,
+        width: (integrity && integrity.outWidth) || opts.width || 0,
+        height: (integrity && integrity.outHeight) || opts.height || 0,
         codec,
         hardwareAccelerated: hw,
         scaleMode: `${hw ? 'NVENC' : 'FFmpeg'} (${codec})`,
+        integrity,
         fellBack: false,
         viaDaemon: true,
       };
@@ -392,10 +433,13 @@
     const taskId = opts.taskId || nextTaskId('ai');
     const sourceExport = opts.sourceExport || (file && file.remoteUrl) || '';
     const isImg = /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test((file && file.name) || sourceExport) || (file && file.type && file.type.startsWith('image/'));
+    const pipeline = opts.pipeline || 'esrgan';
     const headers = {
       'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
+      'X-Kaptura-Pipeline': pipeline,
       'X-Kaptura-Ai-Model': opts.model || 'realesrgan-x4plus',
       'X-Kaptura-Scale': String(opts.scale || 4),
+      'X-Kaptura-Rife-Mult': String(opts.rifeMult || 2),
       'X-Kaptura-Quality': opts.quality || 'high',
       'X-Kaptura-Task-Id': taskId,
       'Accept': 'application/octet-stream',
@@ -421,14 +465,22 @@
       const blob = await res.blob();
       if (typeof opts.onProgress === 'function') opts.onProgress(1, { taskId, stage: 'COMPLETE' });
       const ext = isImg ? 'png' : 'mp4';
+      const integrity = parseIntegrityHeaders(res);
+      const modelUsed = res.headers.get('X-Kaptura-Model') || opts.model || 'realesrgan-x4plus';
+      const pipeUsed = res.headers.get('X-Kaptura-Pipeline') || pipeline;
+      const modeTag = pipeUsed === 'rife'
+        ? `RIFE v4.6 (${opts.rifeMult || 2}× FPS)`
+        : (pipeUsed === 'hybrid' ? `Real-ESRGAN (${modelUsed}) + RIFE v4.6` : `Real-ESRGAN (${modelUsed})`);
       return {
         blob,
         mime: isImg ? 'image/png' : 'video/mp4',
         ext,
-        width: opts.width || 0,
-        height: opts.height || 0,
-        model: res.headers.get('X-Kaptura-Model') || opts.model || 'realesrgan-x4plus',
-        scaleMode: `Real-ESRGAN (${res.headers.get('X-Kaptura-Model') || opts.model || 'realesrgan-x4plus'})`,
+        pipeline: pipeUsed,
+        width: (integrity && integrity.outWidth) || opts.width || 0,
+        height: (integrity && integrity.outHeight) || opts.height || 0,
+        model: modelUsed,
+        scaleMode: modeTag,
+        integrity,
         neural: true,
         fellBack: false,
         viaDaemon: true,
@@ -444,6 +496,7 @@
     getCachedHealth,
     isReadyForTranscode,
     isNeuralAvailable,
+    isRifeAvailable,
     subscribeTaskProgress,
     transcodeViaDaemon,
     upscaleAiViaDaemon,

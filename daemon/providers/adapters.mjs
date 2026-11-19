@@ -38,15 +38,13 @@ export function resolveCompanionPath(providerKey) {
   return null;
 }
 
-/** Locate real-esrgan ncnn vulkan binary if installed via env, PATH, or companion dir. */
-export function resolveRealEsrganExecutable() {
-  const envPath = process.env.ETHERNIUM_REALESRGAN_PATH;
+/** Shared binary locator checking explicit env override, UPSKALETOR companion dir, then system PATH. */
+function resolveBinaryExecutable(envKey, exeStem) {
+  const envPath = process.env[envKey];
   if (envPath && existsSync(envPath)) return resolve(envPath);
 
   const upDir = resolveCompanionPath("upskalator");
-  const exeNames = process.platform === "win32"
-    ? ["realesrgan-ncnn-vulkan.exe", "realesrgan-ncnn-vulkan"]
-    : ["realesrgan-ncnn-vulkan"];
+  const exeNames = process.platform === "win32" ? [`${exeStem}.exe`, exeStem] : [exeStem];
 
   if (upDir) {
     for (const exe of exeNames) {
@@ -57,7 +55,7 @@ export function resolveRealEsrganExecutable() {
 
   try {
     const cmd = process.platform === "win32" ? "where.exe" : "which";
-    const probe = spawnSync(cmd, ["realesrgan-ncnn-vulkan"], { encoding: "utf8", windowsHide: true });
+    const probe = spawnSync(cmd, [exeStem], { encoding: "utf8", windowsHide: true });
     if (probe.status === 0 && probe.stdout) {
       const firstLine = probe.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
       if (firstLine && existsSync(firstLine)) return resolve(firstLine);
@@ -67,21 +65,34 @@ export function resolveRealEsrganExecutable() {
   return null;
 }
 
+/** Locate real-esrgan ncnn vulkan binary if installed via env, PATH, or companion dir. */
+export function resolveRealEsrganExecutable() {
+  return resolveBinaryExecutable("ETHERNIUM_REALESRGAN_PATH", "realesrgan-ncnn-vulkan");
+}
+
+/** Locate rife-ncnn-vulkan binary if installed via env, PATH, or companion dir. */
+export function resolveRifeExecutable() {
+  return resolveBinaryExecutable("ETHERNIUM_RIFE_PATH", "rife-ncnn-vulkan");
+}
+
 export function getCompanionStatus() {
   const upskalatorPath = resolveCompanionPath("upskalator");
   const fontForgePath = resolveCompanionPath("fontForge");
   const voxPath = resolveCompanionPath("etherniumVox");
   const realEsrganPath = resolveRealEsrganExecutable();
+  const rifePath = resolveRifeExecutable();
   return {
     etherniumVox: Boolean(voxPath),
     fontForge: Boolean(fontForgePath),
     upskalator: Boolean(upskalatorPath),
     realEsrgan: Boolean(realEsrganPath),
+    rife: Boolean(rifePath),
     paths: {
       etherniumVox: voxPath,
       fontForge: fontForgePath,
       upskalator: upskalatorPath,
       realEsrgan: realEsrganPath,
+      rife: rifePath,
     },
   };
 }

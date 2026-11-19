@@ -117,6 +117,8 @@ export function createKapturaDaemon({
         preferredCodec: backend.preferredCodec,
         hardwareAccelerated: backend.hardwareAccelerated,
         neuralAvailable: Boolean(providers.realEsrgan),
+        rifeAvailable: Boolean(providers.rife),
+        casFilter: Boolean(backend.filters && backend.filters.cas),
         encoders: backend.encoders,
       },
       streaming: {
@@ -131,17 +133,39 @@ export function createKapturaDaemon({
         fontForge: providers.fontForge,
         upskalator: providers.upskalator,
         realEsrgan: Boolean(providers.realEsrgan),
+        rife: Boolean(providers.rife),
       },
       hlc: hlcEngine.now(),
     };
   };
+
+  function applyForensicHeaders(hdrs, result) {
+    const it = result && result.integrity ? result.integrity : null;
+    if (!it) return hdrs;
+    if (it.srcWidth && it.srcHeight) hdrs["X-Kaptura-Src-Res"] = `${it.srcWidth}x${it.srcHeight}`;
+    if (it.outWidth && it.outHeight) hdrs["X-Kaptura-Out-Res"] = `${it.outWidth}x${it.outHeight}`;
+    if (it.srcFps) hdrs["X-Kaptura-Src-Fps"] = String(it.srcFps);
+    if (it.outFps) hdrs["X-Kaptura-Out-Fps"] = String(it.outFps);
+    if (it.fpsDriftPct !== undefined) hdrs["X-Kaptura-Fps-Drift-Pct"] = String(it.fpsDriftPct);
+    if (it.durationDriftMs !== undefined) hdrs["X-Kaptura-Duration-Drift-Ms"] = String(it.durationDriftMs);
+    if (it.audioPreserved !== null && it.audioPreserved !== undefined) {
+      hdrs["X-Kaptura-Audio-Preserved"] = String(Boolean(it.audioPreserved));
+    }
+    if (it.audioCodec) hdrs["X-Kaptura-Audio-Codec"] = String(it.audioCodec);
+    if (it.elapsedMs !== undefined) hdrs["X-Kaptura-Elapsed-Ms"] = String(it.elapsedMs);
+    return hdrs;
+  }
 
   const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Range, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode"
+      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode"
+    );
+    res.setHeader(
+      "Access-Control-Expose-Headers",
+      "X-Kaptura-Codec, X-Kaptura-HW, X-Kaptura-Model, X-Kaptura-Pipeline, X-Kaptura-Src-Res, X-Kaptura-Out-Res, X-Kaptura-Src-Fps, X-Kaptura-Out-Fps, X-Kaptura-Fps-Drift-Pct, X-Kaptura-Duration-Drift-Ms, X-Kaptura-Audio-Preserved, X-Kaptura-Audio-Codec, X-Kaptura-Elapsed-Ms"
     );
 
     if (req.method === "OPTIONS") {
@@ -364,12 +388,13 @@ export function createKapturaDaemon({
         }
         if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
           const ext = path.extname(result.outputFile).toLowerCase();
-          res.writeHead(200, {
+          const hdrs = applyForensicHeaders({
             "Content-Type": MIME_MAP[ext] || "video/mp4",
             "Content-Disposition": `attachment; filename="${result.outputFile}"`,
             "X-Kaptura-Codec": result.codec || "",
             "X-Kaptura-HW": String(Boolean(result.hardwareAccelerated)),
-          });
+          }, result);
+          res.writeHead(200, hdrs);
           const fileStream = fs.createReadStream(result.videoPath);
           fileStream.once("close", () => {
             try { if (fs.existsSync(result.videoPath)) fs.unlinkSync(result.videoPath); } catch {}
@@ -403,8 +428,10 @@ export function createKapturaDaemon({
         const inputExt = inputPath
           ? (path.extname(inputPath).toLowerCase() || ".mp4")
           : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".mp4");
+        const pipeline = String(h["x-kaptura-pipeline"] || url.searchParams.get("pipeline") || "esrgan");
         const model = String(h["x-kaptura-ai-model"] || url.searchParams.get("model") || "realesrgan-x4plus");
         const scale = Number(h["x-kaptura-scale"] || url.searchParams.get("scale") || 4);
+        const rifeMult = Number(h["x-kaptura-rife-mult"] || url.searchParams.get("rifeMult") || 2);
         const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
         const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);
         const denoise = String(h["x-kaptura-denoise"] || url.searchParams.get("denoise") || "").toLowerCase() === "true";
@@ -416,8 +443,10 @@ export function createKapturaDaemon({
           inputBuffer: raw,
           inputExt,
           outputDir: exportsDir,
+          pipeline,
           model,
           scale,
+          rifeMult,
           width,
           height,
           denoise,
@@ -432,11 +461,13 @@ export function createKapturaDaemon({
         }
         if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
           const ext = path.extname(result.outputFile).toLowerCase();
-          res.writeHead(200, {
+          const hdrs = applyForensicHeaders({
             "Content-Type": MIME_MAP[ext] || "video/mp4",
             "Content-Disposition": `attachment; filename="${result.outputFile}"`,
             "X-Kaptura-Model": result.model || model,
-          });
+            "X-Kaptura-Pipeline": result.pipeline || pipeline,
+          }, result);
+          res.writeHead(200, hdrs);
           const fileStream = fs.createReadStream(result.videoPath);
           fileStream.once("close", () => {
             try { if (fs.existsSync(result.videoPath)) fs.unlinkSync(result.videoPath); } catch {}
