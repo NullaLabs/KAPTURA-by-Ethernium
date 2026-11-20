@@ -72,6 +72,12 @@ const casCmd = Upskaletor.command('clip.mp4', '2k_cas', 'auto');
 check('Upskaletor 2k_cas command emits Lanczos 2560x1440', casCmd.includes('-Mode Lanczos') && casCmd.includes('-Width 2560') && casCmd.includes('-Height 1440'));
 check('Upskaletor has rife_2x profile', Boolean(Upskaletor.PROFILES['rife_2x']) && Upskaletor.PROFILES['rife_2x'].pipeline === 'rife');
 check('Upskaletor has hybrid_4k_rife profile', Boolean(Upskaletor.PROFILES['hybrid_4k_rife']) && Upskaletor.PROFILES['hybrid_4k_rife'].pipeline === 'hybrid');
+check('Upskaletor exports isProfileCompatible', typeof Upskaletor.isProfileCompatible === 'function');
+check('rife_2x allowed for video, locked for image', Upskaletor.isProfileCompatible('rife_2x', 'video') === true && Upskaletor.isProfileCompatible('rife_2x', 'image') === false);
+check('hybrid_4k_rife allowed for video, locked for image', Upskaletor.isProfileCompatible('hybrid_4k_rife', 'video') === true && Upskaletor.isProfileCompatible('hybrid_4k_rife', 'image') === false);
+check('youtube_4k allowed for video, locked for image', Upskaletor.isProfileCompatible('youtube_4k', 'video') === true && Upskaletor.isProfileCompatible('youtube_4k', 'image') === false);
+check('2x_super & 4x_super allowed for image, locked for video', Upskaletor.isProfileCompatible('2x_super', 'image') === true && Upskaletor.isProfileCompatible('2x_super', 'video') === false && Upskaletor.isProfileCompatible('4x_super', 'image') === true && Upskaletor.isProfileCompatible('4x_super', 'video') === false);
+check('4k_ai & 4k_cas compatible with both image and video', Upskaletor.isProfileCompatible('4k_ai', 'image') === true && Upskaletor.isProfileCompatible('4k_ai', 'video') === true && Upskaletor.isProfileCompatible('4k_cas', 'image') === true && Upskaletor.isProfileCompatible('4k_cas', 'video') === true);
 
 const Comparator = require(p('comparator.js'));
 console.log('\n--- FORENSIC OPTICAL INSPECTOR (SOBEL + DELTA) ---');

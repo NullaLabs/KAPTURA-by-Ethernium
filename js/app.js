@@ -51,6 +51,144 @@
     if (fill) fill.style.width = Math.round(ratio * 100) + '%';
   }
 
+  /* ---- adaptive media-type locks (image vs video) ----------------------- */
+  function detectMediaKind(fileOrSrc) {
+    if (!fileOrSrc) return 'video';
+    if (typeof fileOrSrc === 'object') {
+      const mime = String(fileOrSrc.type || fileOrSrc.mime || '');
+      if (mime.startsWith('image/')) return 'image';
+      if (mime.startsWith('video/')) return 'video';
+    }
+    if (window.KapturaUpskaletor && typeof window.KapturaUpskaletor.isImageFile === 'function') {
+      return window.KapturaUpskaletor.isImageFile(fileOrSrc) ? 'image' : 'video';
+    }
+    if (window.KapturaSVGVector && typeof window.KapturaSVGVector.isImageFile === 'function') {
+      return window.KapturaSVGVector.isImageFile(fileOrSrc) ? 'image' : 'video';
+    }
+    const name = (typeof fileOrSrc === 'string' ? fileOrSrc : fileOrSrc.name) || '';
+    return /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test(name) ? 'image' : 'video';
+  }
+
+  function syncSelectLocks(sel, ruleFn, fallbackValue) {
+    if (!sel || !sel.options) return;
+    let firstEnabled = '';
+    Array.from(sel.options).forEach((opt) => {
+      const res = ruleFn(opt);
+      const locked = typeof res === 'object' ? Boolean(res && res.locked) : Boolean(res);
+      const reason = typeof res === 'object' ? String((res && res.reason) || '') : (locked ? 'NO COMPATIBLE' : '');
+      opt.disabled = locked;
+      if (locked && reason) opt.dataset.lockReason = reason;
+      else delete opt.dataset.lockReason;
+      if (!locked && !firstEnabled) firstEnabled = opt.value;
+    });
+    const curOpt = sel.options[sel.selectedIndex];
+    if (curOpt && curOpt.disabled) {
+      const fbOpt = fallbackValue ? Array.from(sel.options).find((o) => o.value === fallbackValue && !o.disabled) : null;
+      const nextVal = fbOpt ? fbOpt.value : firstEnabled;
+      if (nextVal) {
+        sel.value = nextVal;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+    if (window.KapturaStudioSelects && typeof window.KapturaStudioSelects.refreshSelect === 'function') {
+      window.KapturaStudioSelects.refreshSelect(sel);
+    }
+  }
+
+  function setCardMediaLock(sel, locked, reasonText) {
+    if (!sel) return;
+    sel.disabled = Boolean(locked);
+    const card = sel.closest('.control-card');
+    if (card) {
+      card.classList.toggle('is-media-locked', Boolean(locked));
+      let badge = card.querySelector('.media-lock-badge');
+      if (locked) {
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'media-lock-badge';
+          card.appendChild(badge);
+        }
+        badge.textContent = `🔒 ${reasonText || 'No aplica para este medio'}`;
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+    if (window.KapturaStudioSelects && typeof window.KapturaStudioSelects.refreshSelect === 'function') {
+      window.KapturaStudioSelects.refreshSelect(sel);
+    }
+  }
+
+  function setMediaModeBadge(badgeId, mediaKind, detailText) {
+    const el = $(badgeId);
+    if (!el) return;
+    el.classList.remove('is-image', 'is-video');
+    if (!mediaKind) {
+      el.textContent = '';
+      return;
+    }
+    el.classList.add(mediaKind === 'image' ? 'is-image' : 'is-video');
+    el.textContent = mediaKind === 'image'
+      ? `🖼️ MODO IMAGEN · ${detailText}`
+      : `🎬 MODO VÍDEO · ${detailText}`;
+  }
+
+  function applyCompressorMediaMode(kind) {
+    const fmtSel = $('compressorFormat');
+    syncSelectLocks(fmtSel, (opt) => {
+      if (kind === 'image' && (opt.value === 'mp4' || opt.value === 'webm')) {
+        return { locked: true, reason: 'SOLO VÍDEO' };
+      }
+      if (kind === 'video' && (opt.value === 'webp' || opt.value === 'jpeg')) {
+        return { locked: true, reason: 'SOLO IMAGEN' };
+      }
+      return { locked: false };
+    }, 'auto');
+    setMediaModeBadge(
+      'compressorMediaBadge',
+      kind,
+      kind === 'image'
+        ? 'Formatos de imagen activos (WebP / JPEG); MP4 y WebM bloqueados'
+        : 'Formatos de vídeo activos (MP4 / WebM); WebP y JPEG bloqueados'
+    );
+  }
+
+  function applySvgMediaMode(kind) {
+    const srcMode = $('svgSource') ? $('svgSource').value : 'scene';
+    const effectiveKind = srcMode === 'scene' ? 'video' : kind;
+    const isImg = effectiveKind === 'image';
+    setCardMediaLock($('svgVectorMode'), !isImg, 'SOLO IMAGEN');
+    setCardMediaLock($('svgFps'), isImg, 'SOLO VÍDEO');
+    setMediaModeBadge(
+      'svgMediaBadge',
+      effectiveKind,
+      isImg
+        ? 'Vectorización <path> activada · FPS de vídeo bloqueado'
+        : (srcMode === 'scene' ? 'Escena Canvas → SVG animado (SMIL) · Cuantización estática bloqueada' : 'Vídeo → SVG animado (SMIL) · Cuantización estática bloqueada')
+    );
+  }
+
+  function applyUpskaletorMediaMode(kind) {
+    const profSel = $('upskaletorProfileSelect');
+    const isImg = kind === 'image';
+    const hasNeural = Boolean(window.KapturaDaemon && typeof window.KapturaDaemon.isNeuralAvailable === 'function' && window.KapturaDaemon.isNeuralAvailable());
+    const fallbackProf = hasNeural ? '4k_ai' : '4k_cas';
+    syncSelectLocks(profSel, (opt) => {
+      const p = window.KapturaUpskaletor && window.KapturaUpskaletor.PROFILES && window.KapturaUpskaletor.PROFILES[opt.value];
+      const rule = (p && p.media) || 'both';
+      if (isImg && rule === 'video') return { locked: true, reason: 'SOLO VÍDEO' };
+      if (!isImg && rule === 'image') return { locked: true, reason: 'SOLO IMAGEN' };
+      return { locked: false };
+    }, fallbackProf);
+    if (typeof updateUpskaletorProfileHint === 'function') updateUpskaletorProfileHint();
+    setMediaModeBadge(
+      'upskaletorMediaBadge',
+      kind,
+      isImg
+        ? 'Perfiles de imagen (2X/4X Super-Res + Real-ESRGAN) activos · RIFE/Social vídeo bloqueados'
+        : 'Perfiles de vídeo (Lanczos CAS / Real-ESRGAN / RIFE 2× FPS) activos · 2X/4X Super-Res imagen bloqueados'
+    );
+  }
+
   /* ---- capability chips ------------------------------------------------- */
   (function renderCaps() {
     const row = $('capsRow');
@@ -609,6 +747,7 @@
       compFile = m;
       $('compressorDzTitle').textContent = `STAGE MASTER: ${m.name}`;
       $('compressorDzSub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Vídeo listo desde Stage`;
+      applyCompressorMediaMode('video');
       refreshCompressorEstimate(m);
     }));
   }
@@ -624,6 +763,7 @@
       upFile = m;
       $('upskaletorDzTitle').textContent = `STAGE MASTER: ${m.name}`;
       $('upskaletorDzSub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Listo desde Stage`;
+      applyUpskaletorMediaMode('video');
     }));
   }
 
@@ -691,6 +831,10 @@
   /* ---- V-Converter (real transcode) ------------------------------------- */
   let convFile = null;
   wireDropzone('dropzone', 'fileInput', (f) => {
+    if (detectMediaKind(f) === 'image') {
+      toast('Esta pestaña solo procesa vídeos (.mp4 / .webm). Para imágenes usa Compresor, SVG Vector o UPSKALETOR.', 'error');
+      return;
+    }
     convFile = f;
     $('dropzone').querySelector('.dz-title').textContent = `SELECTED: ${f.name}`;
     $('dropzone').querySelector('.dz-sub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${f.type || 'video'}`;
@@ -779,9 +923,10 @@
 
   wireDropzone('compressorDropzone', 'compressorFileInput', (f) => {
     compFile = f;
-    const isImg = window.KapturaSVGVector ? window.KapturaSVGVector.isImageFile(f) : f.type.startsWith('image/');
+    const kind = detectMediaKind(f);
     $('compressorDzTitle').textContent = `SELECTED: ${f.name}`;
-    $('compressorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen' : 'Vídeo'} original`;
+    $('compressorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen' : 'Vídeo'} original`;
+    applyCompressorMediaMode(kind);
     refreshCompressorEstimate(f);
   });
 
@@ -925,6 +1070,7 @@
     const sel = $('upskaletorProfileSelect');
     if (sel && dh && dh.online && dh.neuralAvailable && !userPickedUpscaleProfile && sel.value === '2k_cas') {
       sel.value = '4k_ai';
+      sel.dispatchEvent(new Event('change', { bubbles: false }));
     }
   }
 
@@ -1038,6 +1184,7 @@
           : '480×270 PNG patrón de alta frecuencia · Escalando a 3840×2160 (4K Multi-Scale WebGL)…';
         const upTabBtn = document.querySelector('.tab-btn[data-tab="tab-upskaletor"]');
         if (upTabBtn) upTabBtn.click();
+        applyUpskaletorMediaMode('image');
         if ($('upskaletorProfileSelect')) {
           $('upskaletorProfileSelect').value = demoProfile;
           $('upskaletorProfileSelect').dispatchEvent(new Event('change', { bubbles: true }));
@@ -1054,9 +1201,10 @@
 
   wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f) => {
     upFile = f;
-    const isImg = window.KapturaUpskaletor.isImageFile(f);
+    const kind = detectMediaKind(f);
     $('upskaletorDzTitle').textContent = `SELECTED: ${f.name}`;
-    $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen' : (f.type || 'video')}`;
+    $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen' : (f.type || 'video')}`;
+    applyUpskaletorMediaMode(kind);
   });
 
   let activeUpscaleCtrl = null;
@@ -1219,6 +1367,10 @@
   /* ---- Cinema GIF (real native GIF89a) ---------------------------------- */
   let cinemaFile = null, cinemaPreviewUrl = null;
   wireDropzone('cinemaDropzone', 'cinemaFileInput', (f) => {
+    if (detectMediaKind(f) === 'image') {
+      toast('Esta pestaña solo procesa vídeos (.mp4 / .webm). Para imágenes usa Compresor, SVG Vector o UPSKALETOR.', 'error');
+      return;
+    }
     cinemaFile = f;
     $('cinemaDzTitle').textContent = `SELECTED: ${f.name}`;
     $('cinemaDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${f.type || 'video'}`;
@@ -1260,11 +1412,21 @@
   /* ---- SVG Vector (real animated SVG & vector paths) ------------------- */
   let svgFile = null;
   wireDropzone('svgDropzone', 'svgFileInput', (f) => {
-    svgFile = f; $('svgSource').value = 'file';
-    const isImg = window.KapturaSVGVector ? window.KapturaSVGVector.isImageFile(f) : false;
+    svgFile = f;
+    const kind = detectMediaKind(f);
     $('svgDzTitle').textContent = `SELECTED: ${f.name}`;
-    $('svgDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${isImg ? 'Imagen para Vectorizar' : 'Vídeo para SVG animado'}`;
+    $('svgDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen para Vectorizar' : 'Vídeo para SVG animado'}`;
+    if ($('svgSource')) {
+      $('svgSource').value = 'file';
+      $('svgSource').dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    applySvgMediaMode(kind);
   });
+  if ($('svgSource')) {
+    $('svgSource').addEventListener('change', () => {
+      applySvgMediaMode(svgFile ? detectMediaKind(svgFile) : 'video');
+    });
+  }
   $('btnSvgExport').addEventListener('click', async () => {
     const status = $('svgStatus');
     const source = $('svgSource').value;
@@ -1368,6 +1530,7 @@
   });
 
   /* ---- boot ------------------------------------------------------------- */
+  applySvgMediaMode('video');
   refreshVault();
   if (!caps.canMp4) toast('Este navegador no puede codificar MP4; se usará WebM real donde aplique.', 'notice', 8000);
 })();

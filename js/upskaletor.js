@@ -21,22 +21,30 @@
   const Scaler = root.KapturaScaler;
 
   const PROFILES = {
-    '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', ai: false, w: 2560, h: 1440, sharpen: 0.90, cfr: true, bitrate: 24 },
-    '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', ai: false, w: 3840, h: 2160, sharpen: 0.95, cfr: true, bitrate: 45 },
-    '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
-    'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
-    'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
-    'rife_2x':        { label: 'RIFE v4.6 · Interpolación Neural 2× FPS', ai: true, pipeline: 'rife', rifeMult: 2, w: 0, h: 0 },
-    'hybrid_4k_rife': { label: 'HYBRID ULTRA · Real-ESRGAN 4K + RIFE 2× FPS', ai: true, pipeline: 'hybrid', model: 'realesrgan-x4plus', scale: 4, rifeMult: 2, w: 3840, h: 2160 },
-    '4k_lanczos':     { label: '4K UHD · Lanczos-3 (in-browser)', ai: false, w: 3840, h: 2160, bitrate: 40 },
-    '1080p_lanczos':  { label: '1080p · Lanczos-3 (in-browser)', ai: false, w: 1920, h: 1080, bitrate: 16 },
-    '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 2, sharpen: 0.70 },
-    '4x_super':       { label: '4X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 4, sharpen: 0.85 },
-    'twitter_4k':     { label: 'Twitter/X · 4K',              ai: false, w: 3840, h: 2160, bitrate: 25 },
-    'twitter_1080p':  { label: 'Twitter/X · 1080p',           ai: false, w: 1920, h: 1080, bitrate: 15 },
-    'youtube_4k':     { label: 'YouTube · 4K Master',         ai: false, w: 3840, h: 2160, bitrate: 45 },
-    '720p':           { label: '720p HD Compact',             ai: false, w: 1280, h: 720,  bitrate: 8 },
+    '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', media: 'both', ai: false, w: 2560, h: 1440, sharpen: 0.90, cfr: true, bitrate: 24 },
+    '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', media: 'both', ai: false, w: 3840, h: 2160, sharpen: 0.95, cfr: true, bitrate: 45 },
+    '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', media: 'both', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
+    'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', media: 'both', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
+    'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', media: 'both', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
+    'rife_2x':        { label: 'RIFE v4.6 · Interpolación Neural 2× FPS', media: 'video', ai: true, pipeline: 'rife', rifeMult: 2, w: 0, h: 0 },
+    'hybrid_4k_rife': { label: 'HYBRID ULTRA · Real-ESRGAN 4K + RIFE 2× FPS', media: 'video', ai: true, pipeline: 'hybrid', model: 'realesrgan-x4plus', scale: 4, rifeMult: 2, w: 3840, h: 2160 },
+    '4k_lanczos':     { label: '4K UHD · Lanczos-3 (in-browser)', media: 'both', ai: false, w: 3840, h: 2160, bitrate: 40 },
+    '1080p_lanczos':  { label: '1080p · Lanczos-3 (in-browser)', media: 'both', ai: false, w: 1920, h: 1080, bitrate: 16 },
+    '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', media: 'image', ai: false, scale: 2, sharpen: 0.70 },
+    '4x_super':       { label: '4X Super-Resolution (Lanczos-3 + CAS)', media: 'image', ai: false, scale: 4, sharpen: 0.85 },
+    'twitter_4k':     { label: 'Twitter/X · 4K',              media: 'video', ai: false, w: 3840, h: 2160, bitrate: 25 },
+    'twitter_1080p':  { label: 'Twitter/X · 1080p',           media: 'video', ai: false, w: 1920, h: 1080, bitrate: 15 },
+    'youtube_4k':     { label: 'YouTube · 4K Master',         media: 'video', ai: false, w: 3840, h: 2160, bitrate: 45 },
+    '720p':           { label: '720p HD Compact',             media: 'both', ai: false, w: 1280, h: 720,  bitrate: 8 },
   };
+
+  function isProfileCompatible(profileKey, mediaKind) {
+    const p = PROFILES[profileKey];
+    if (!p) return true;
+    const rule = p.media || 'both';
+    if (rule === 'both' || !mediaKind) return true;
+    return rule === mediaKind;
+  }
 
   function command(fileName, profileKey, engine) {
     const p = PROFILES[profileKey] || PROFILES['4k_cas'];
@@ -240,7 +248,7 @@
     };
   }
 
-  const api = { run, PROFILES, command, isImageFile };
+  const api = { run, PROFILES, command, isImageFile, isProfileCompatible };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaUpskaletor = api;
 })(typeof self !== 'undefined' ? self : this);

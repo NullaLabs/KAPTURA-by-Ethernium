@@ -527,7 +527,10 @@ video#previewVideo {
 }
 .kpr-select-opt {
   width: 100%;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   text-align: left;
   background: transparent;
   border: none;
@@ -539,8 +542,69 @@ video#previewVideo {
   cursor: pointer;
   transition: background 0.16s ease, color 0.16s ease;
 }
-.kpr-select-opt:hover { background: rgba(0, 240, 255, 0.16); color: var(--cyan); }
+.kpr-select-opt:hover:not(.is-disabled) { background: rgba(0, 240, 255, 0.16); color: var(--cyan); }
 .kpr-select-opt.selected { background: rgba(0, 255, 157, 0.16); color: var(--emerald); font-weight: 700; }
+.kpr-select-opt.is-disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+  color: var(--muted);
+}
+.kpr-opt-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kpr-opt-lock {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(15, 23, 42, 0.85);
+  color: #f59e0b;
+  white-space: nowrap;
+}
+.kpr-select.is-disabled .kpr-select-trigger {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.control-card.is-media-locked {
+  opacity: 0.56;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.media-lock-badge {
+  margin-top: 6px;
+  font-family: 'Fira Code', monospace;
+  font-size: 10px;
+  color: #f59e0b;
+}
+.media-mode-pill {
+  display: none;
+  margin: 10px auto 0;
+  width: fit-content;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.media-mode-pill.is-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan);
+  background: rgba(0, 240, 255, 0.09);
+  border: 1px solid rgba(0, 240, 255, 0.36);
+}
+.media-mode-pill.is-video {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--emerald);
+  background: rgba(0, 255, 157, 0.09);
+  border: 1px solid rgba(0, 255, 157, 0.36);
+}
 
 select, input:not([type="checkbox"]):not([type="range"]) {
   width: 100%;

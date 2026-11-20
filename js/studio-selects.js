@@ -59,11 +59,27 @@
     const makeOptBtn = (opt) => {
       const item = document.createElement('button');
       item.type = 'button';
-      item.className = 'kpr-select-opt' + (opt.selected ? ' selected' : '');
+      const locked = Boolean(opt.disabled);
+      item.disabled = locked;
+      item.className = 'kpr-select-opt' + (opt.selected ? ' selected' : '') + (locked ? ' is-disabled' : '');
+      item.setAttribute('aria-disabled', locked ? 'true' : 'false');
       item.dataset.value = opt.value;
-      item.textContent = opt.textContent;
+
+      const textSpan = document.createElement('span');
+      textSpan.className = 'kpr-opt-text';
+      textSpan.textContent = opt.textContent;
+      item.appendChild(textSpan);
+
+      if (locked && opt.dataset && opt.dataset.lockReason) {
+        const lockPill = document.createElement('span');
+        lockPill.className = 'kpr-opt-lock';
+        lockPill.textContent = `🔒 ${opt.dataset.lockReason}`;
+        item.appendChild(lockPill);
+      }
+
       item.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (opt.disabled || item.disabled) return;
         sel.value = opt.value;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
         closeAll();
@@ -74,6 +90,15 @@
     const syncText = () => {
       const chosen = sel.options[sel.selectedIndex];
       labelSpan.textContent = chosen ? chosen.textContent : '';
+      const isDisabled = Boolean(sel.disabled);
+      trigger.disabled = isDisabled;
+      trigger.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
+      wrap.classList.toggle('is-disabled', isDisabled);
+      if (isDisabled) {
+        wrap.classList.remove('open');
+        const card = wrap.closest('.control-card');
+        if (card) card.style.zIndex = '';
+      }
       menu.querySelectorAll('.kpr-select-opt').forEach((btn) => {
         btn.classList.toggle('selected', btn.dataset.value === sel.value);
       });
@@ -81,6 +106,7 @@
 
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (sel.disabled || trigger.disabled) return;
       const willOpen = !wrap.classList.contains('open');
       closeAll(wrap);
       wrap.classList.toggle('open', willOpen);
@@ -89,6 +115,8 @@
     });
 
     sel.addEventListener('change', syncText);
+    sel.addEventListener('kpr:sync', rebuildOptions);
+    sel._kprRefresh = rebuildOptions;
     rebuildOptions();
 
     sel.parentNode.insertBefore(wrap, sel);
@@ -96,6 +124,16 @@
     wrap.appendChild(sel);
     wrap.appendChild(trigger);
     wrap.appendChild(menu);
+  }
+
+  function refreshSelect(sel) {
+    if (!sel) return;
+    if (typeof sel._kprRefresh === 'function') sel._kprRefresh();
+    else enhanceSelect(sel);
+  }
+
+  function refreshAll() {
+    document.querySelectorAll('.control-card select').forEach(refreshSelect);
   }
 
   function enhanceAll() {
@@ -109,7 +147,7 @@
     else enhanceAll();
   }
 
-  const api = { enhanceAll, enhanceSelect };
+  const api = { enhanceAll, enhanceSelect, refreshSelect, refreshAll };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaStudioSelects = api;
 })(typeof self !== 'undefined' ? self : this);
