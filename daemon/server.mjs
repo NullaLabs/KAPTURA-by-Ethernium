@@ -58,6 +58,51 @@ function readRequestBody(req, maxBytes = 250 * 1024 * 1024) {
   });
 }
 
+function normalizeUploadExt(raw, fallback = ".webm") {
+  const s = String(raw || "").trim().toLowerCase();
+  const base = s.includes("/") || s.includes("\\") ? path.basename(s) : s;
+  const candidate = base.startsWith(".") ? base : (base.includes(".") ? path.extname(base) : `.${base}`);
+  return /^\.[a-z0-9]{2,6}$/.test(candidate) ? candidate : fallback;
+}
+
+function streamRequestToFile(req, destPath, maxBytes = 2 * 1024 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(destPath);
+    let total = 0;
+    let settled = false;
+    const cleanup = (err) => {
+      if (settled) return;
+      settled = true;
+      try { ws.destroy(); } catch {}
+      try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+      reject(err);
+    };
+    req.on("data", (chunk) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        req.destroy();
+        cleanup(new Error(`Payload exceeds max limit (${maxBytes} bytes)`));
+        return;
+      }
+      if (!ws.write(chunk)) req.pause();
+    });
+    ws.on("drain", () => { if (!settled) req.resume(); });
+    req.on("end", () => {
+      if (!settled) ws.end();
+    });
+    ws.on("close", () => {
+      if (!settled) {
+        settled = true;
+        resolve(total);
+      }
+    });
+    req.on("error", cleanup);
+    req.on("aborted", () => cleanup(new Error("Upload stream aborted")));
+    ws.on("error", cleanup);
+  });
+}
+
 function safeStaticFile(baseDir, relPath) {
   const base = path.resolve(baseDir);
   const candidate = path.resolve(base, relPath.replace(/^\/+/, ""));
@@ -77,8 +122,35 @@ export function createKapturaDaemon({
   let activePort = port;
   let ipcHandle = null;
   const sseClients = new Set();
+  const jobs = new Map();
+
+  const pruneJobsMap = () => {
+    while (jobs.size >= 64) {
+      const oldestKey = jobs.keys().next().value;
+      if (!oldestKey) break;
+      jobs.delete(oldestKey);
+    }
+  };
 
   const emitProgressEvent = (evt) => {
+    if (evt && evt.taskId && jobs.has(evt.taskId)) {
+      const cur = jobs.get(evt.taskId);
+      if (cur && cur.status === "running") {
+        Object.assign(cur, {
+          progress: evt.progress ?? cur.progress,
+          stage: evt.stage || cur.stage,
+          frame: evt.frame ?? cur.frame,
+          totalFrames: evt.totalFrames ?? cur.totalFrames,
+          segment: evt.segment ?? cur.segment,
+          totalSegments: evt.totalSegments ?? cur.totalSegments,
+          secPerFrame: evt.secPerFrame ?? cur.secPerFrame,
+          etaSec: evt.etaSec ?? cur.etaSec,
+          model: evt.model ?? cur.model,
+          scale: evt.scale ?? cur.scale,
+          updatedAt: Date.now(),
+        });
+      }
+    }
     const payload = `event: progress\ndata: ${JSON.stringify(evt)}\n\n`;
     for (const client of sseClients) {
       try { client.write(payload); } catch { sseClients.delete(client); }
@@ -128,6 +200,7 @@ export function createKapturaDaemon({
         trimEndpoint: "/trim",
         upscaleAiEndpoint: "/upscale-ai",
         cancelEndpoint: "/cancel",
+        jobsEndpoint: "/jobs",
       },
       providers: {
         etherniumVox: providers.etherniumVox,
@@ -162,7 +235,7 @@ export function createKapturaDaemon({
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode"
+      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode, X-Kaptura-Async"
     );
     res.setHeader(
       "Access-Control-Expose-Headers",
@@ -328,12 +401,22 @@ export function createKapturaDaemon({
       }
     }
 
+    if (req.method === "GET" && pathname.startsWith("/jobs/")) {
+      const targetJobId = decodeURIComponent(pathname.slice("/jobs/".length)).trim();
+      const job = targetJobId ? jobs.get(targetJobId) : null;
+      if (!job) return sendJson(res, 404, { ok: false, error: "Job not found" });
+      return sendJson(res, 200, job);
+    }
+
     if (req.method === "POST" && pathname === "/transcode") {
+      let uploadTmpPath = "";
       try {
         const h = req.headers;
+        const isAsync = url.searchParams.get("async") === "1" || String(h["x-kaptura-async"] || "") === "1";
         const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        const container = String(h["x-kaptura-container"] || url.searchParams.get("container") || "mp4");
+        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || `tx_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
         let inputPath = "";
-        let raw = null;
         if (sourceExport) {
           const resolved = resolveExportRef(sourceExport);
           if (!resolved) {
@@ -341,15 +424,16 @@ export function createKapturaDaemon({
           }
           inputPath = resolved;
         } else {
-          raw = await readRequestBody(req);
-          if (!raw.length) {
+          const rawExt = normalizeUploadExt(h["x-kaptura-ext"] || url.searchParams.get("ext"), ".webm");
+          uploadTmpPath = path.join(exportsDir, `.tmp_upload_${taskId}${rawExt}`);
+          const bytes = await streamRequestToFile(req, uploadTmpPath);
+          if (!bytes) {
+            try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
             return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
           }
+          inputPath = uploadTmpPath;
         }
-        const container = String(h["x-kaptura-container"] || url.searchParams.get("container") || "mp4");
-        const inputExt = inputPath
-          ? (path.extname(inputPath).toLowerCase() || ".mp4")
-          : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".webm");
+        const inputExt = path.extname(inputPath).toLowerCase() || ".webm";
         const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
         const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);
         const fps = Number(h["x-kaptura-fps"] || url.searchParams.get("fps") || 0);
@@ -361,11 +445,10 @@ export function createKapturaDaemon({
         const cfr = cfrHeader === "1" || cfrHeader === "true";
         const startSec = Number(h["x-kaptura-start-sec"] || url.searchParams.get("startSec") || 0);
         const endSec = Number(h["x-kaptura-end-sec"] || url.searchParams.get("endSec") || 0);
-        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
 
-        const result = await transcodeMediaTask({
+        const taskParams = {
           inputPath,
-          inputBuffer: raw,
+          inputBuffer: null,
           inputExt,
           outputDir: exportsDir,
           container,
@@ -381,7 +464,57 @@ export function createKapturaDaemon({
           endSec,
           taskId,
           onProgress: emitProgressEvent,
-        });
+        };
+
+        if (isAsync) {
+          pruneJobsMap();
+          const jobRec = {
+            ok: true,
+            taskId,
+            status: "running",
+            progress: 5,
+            stage: "QUEUED",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          jobs.set(taskId, jobRec);
+          sendJson(res, 202, { ok: true, taskId, status: "running", pollUrl: `/jobs/${encodeURIComponent(taskId)}` });
+          const tmpToClean = uploadTmpPath;
+          (async () => {
+            try {
+              const result = await transcodeMediaTask(taskParams);
+              if (!result.success) {
+                Object.assign(jobRec, {
+                  status: result.status === "cancelled" ? "cancelled" : "failed",
+                  error: result.error || result.status || "Transcode failed",
+                  stage: result.status === "cancelled" ? "CANCELLED" : "FAILED",
+                  updatedAt: Date.now(),
+                });
+              } else {
+                Object.assign(jobRec, {
+                  ...result,
+                  status: "completed",
+                  progress: 100,
+                  stage: "COMPLETE",
+                  downloadUrl: `/exports/${result.outputFile}`,
+                  updatedAt: Date.now(),
+                });
+              }
+            } catch (err) {
+              Object.assign(jobRec, { status: "failed", stage: "FAILED", error: err instanceof Error ? err.message : String(err), updatedAt: Date.now() });
+            } finally {
+              if (tmpToClean) try { if (fs.existsSync(tmpToClean)) fs.unlinkSync(tmpToClean); } catch {}
+            }
+          })();
+          return;
+        }
+
+        let result;
+        try {
+          result = await transcodeMediaTask(taskParams);
+        } finally {
+          if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
+        }
 
         if (!result.success) {
           const code = result.status === "cancelled" ? 409 : (result.status === "empty_input" || result.status === "missing_input" ? 400 : 422);
@@ -404,6 +537,7 @@ export function createKapturaDaemon({
         }
         return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
       } catch (err) {
+        if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
         return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -414,6 +548,12 @@ export function createKapturaDaemon({
         return sendJson(res, 400, { ok: false, error: "Task ID is required." });
       }
       const resCancel = cancelTask(targetTaskId);
+      const job = jobs.get(targetTaskId);
+      if (job && job.status === "running") {
+        job.status = "cancelled";
+        job.stage = "CANCELLED";
+        job.updatedAt = Date.now();
+      }
       if (resCancel.cancelled) {
         emitProgressEvent({ taskId: targetTaskId, stage: "CANCELLED", progress: 0 });
       }
@@ -421,11 +561,13 @@ export function createKapturaDaemon({
     }
 
     if (req.method === "POST" && pathname === "/upscale-ai") {
+      let uploadTmpPath = "";
       try {
         const h = req.headers;
+        const isAsync = url.searchParams.get("async") === "1" || String(h["x-kaptura-async"] || "") === "1";
         const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
         let inputPath = "";
-        let raw = null;
         if (sourceExport) {
           const resolved = resolveExportRef(sourceExport);
           if (!resolved) {
@@ -433,14 +575,16 @@ export function createKapturaDaemon({
           }
           inputPath = resolved;
         } else {
-          raw = await readRequestBody(req);
-          if (!raw.length) {
+          const rawExt = normalizeUploadExt(h["x-kaptura-ext"] || url.searchParams.get("ext"), ".mp4");
+          uploadTmpPath = path.join(exportsDir, `.tmp_upload_${taskId}${rawExt}`);
+          const bytes = await streamRequestToFile(req, uploadTmpPath);
+          if (!bytes) {
+            try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
             return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
           }
+          inputPath = uploadTmpPath;
         }
-        const inputExt = inputPath
-          ? (path.extname(inputPath).toLowerCase() || ".mp4")
-          : String(h["x-kaptura-ext"] || url.searchParams.get("ext") || ".mp4");
+        const inputExt = path.extname(inputPath).toLowerCase() || ".mp4";
         const pipeline = String(h["x-kaptura-pipeline"] || url.searchParams.get("pipeline") || "esrgan");
         const model = String(h["x-kaptura-ai-model"] || url.searchParams.get("model") || "realesrgan-x4plus");
         const scale = Number(h["x-kaptura-scale"] || url.searchParams.get("scale") || 4);
@@ -451,11 +595,10 @@ export function createKapturaDaemon({
         const rawSharpen = h["x-kaptura-sharpen"] ?? url.searchParams.get("sharpen");
         const sharpen = rawSharpen !== undefined && rawSharpen !== "" ? Number(rawSharpen) : null;
         const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
-        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
 
-        const result = await upscaleAiTask({
+        const taskParams = {
           inputPath,
-          inputBuffer: raw,
+          inputBuffer: null,
           inputExt,
           outputDir: exportsDir,
           pipeline,
@@ -469,7 +612,57 @@ export function createKapturaDaemon({
           quality,
           taskId,
           onProgress: emitProgressEvent,
-        });
+        };
+
+        if (isAsync) {
+          pruneJobsMap();
+          const jobRec = {
+            ok: true,
+            taskId,
+            status: "running",
+            progress: 5,
+            stage: "QUEUED",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          jobs.set(taskId, jobRec);
+          sendJson(res, 202, { ok: true, taskId, status: "running", pollUrl: `/jobs/${encodeURIComponent(taskId)}` });
+          const tmpToClean = uploadTmpPath;
+          (async () => {
+            try {
+              const result = await upscaleAiTask(taskParams);
+              if (!result.success) {
+                Object.assign(jobRec, {
+                  status: result.status === "cancelled" ? "cancelled" : "failed",
+                  error: result.error || result.status || "Upscale AI failed",
+                  stage: result.status === "cancelled" ? "CANCELLED" : "FAILED",
+                  updatedAt: Date.now(),
+                });
+              } else {
+                Object.assign(jobRec, {
+                  ...result,
+                  status: "completed",
+                  progress: 100,
+                  stage: "COMPLETE",
+                  downloadUrl: `/exports/${result.outputFile}`,
+                  updatedAt: Date.now(),
+                });
+              }
+            } catch (err) {
+              Object.assign(jobRec, { status: "failed", stage: "FAILED", error: err instanceof Error ? err.message : String(err), updatedAt: Date.now() });
+            } finally {
+              if (tmpToClean) try { if (fs.existsSync(tmpToClean)) fs.unlinkSync(tmpToClean); } catch {}
+            }
+          })();
+          return;
+        }
+
+        let result;
+        try {
+          result = await upscaleAiTask(taskParams);
+        } finally {
+          if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
+        }
 
         if (!result.success) {
           const code = result.status === "cancelled" ? 409 : (result.status === "empty_input" || result.status === "missing_input" ? 400 : 422);
@@ -492,6 +685,7 @@ export function createKapturaDaemon({
         }
         return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
       } catch (err) {
+        if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
         return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -629,6 +823,10 @@ export function createKapturaDaemon({
     };
   });
 
+  server.requestTimeout = 0;
+  server.timeout = 0;
+  server.headersTimeout = 120_000;
+
   return {
     server,
     start: () =>
@@ -646,6 +844,11 @@ export function createKapturaDaemon({
     stop: () =>
       new Promise((resolve) => {
         clearInterval(sseKeepAlive);
+        for (const [id, rec] of jobs.entries()) {
+          if (rec && rec.status === "running") {
+            try { cancelTask(id); } catch {}
+          }
+        }
         for (const client of sseClients) {
           try { client.end(); } catch {}
         }
@@ -655,6 +858,7 @@ export function createKapturaDaemon({
           ipcHandle.close();
           ipcHandle = null;
         }
+        if (typeof server.closeAllConnections === "function") server.closeAllConnections();
         server.close(() => resolve());
       }),
   };

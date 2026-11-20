@@ -29,8 +29,16 @@
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
     ));
   }
-  function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
+  function downloadBlob(blobOrUrl, filename) {
+    if (!blobOrUrl) return;
+    if (typeof blobOrUrl === 'string') {
+      const a = document.createElement('a');
+      a.style.display = 'none'; a.href = blobOrUrl; a.download = filename;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => a.remove(), 200);
+      return;
+    }
+    const url = URL.createObjectURL(blobOrUrl);
     const a = document.createElement('a');
     a.style.display = 'none'; a.href = url; a.download = filename;
     document.body.appendChild(a); a.click();
@@ -947,7 +955,7 @@
       return;
     }
     hint.textContent = h && h.neuralAvailable
-      ? `Real-ESRGAN (${prof.model || 'x4plus'}) activo en GPU Vulkan vía :3370.`
+      ? `Real-ESRGAN activo vía :3370 (en vídeo 1080p+ usa 2× neural nativo directo a 4K; para clips largos 60fps instantáneos elige 4k_cas).`
       : 'Requiere realesrgan-ncnn-vulkan (`npm run setup:neural`); sin binario hace handoff honesto.';
   }
 
@@ -1099,6 +1107,12 @@
         ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
         : await ensureRealFile(activeSrc);
 
+      const formatEta = (sec) => {
+        if (sec === null || sec === undefined || !Number.isFinite(Number(sec))) return '';
+        const s = Math.max(0, Math.round(Number(sec)));
+        if (s >= 60) return ` · ETA ${Math.floor(s / 60)}m ${s % 60}s`;
+        return ` · ETA ${s}s`;
+      };
       const detailSelect = $('upskaletorDetailSelect');
       const sharpenVal = detailSelect ? Number(detailSelect.value) : undefined;
       const result = await window.KapturaUpskaletor.run(fileObj, profile, engine, {
@@ -1109,9 +1123,13 @@
         onProgress: (p, m) => {
           setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', p);
           const stageTag = m && m.stage ? ` · ${m.stage}` : '';
-          const frameTag = m && m.frame ? ` f${m.frame}` : '';
+          const modelTag = m && m.model ? ` (${m.model}${m.scale ? ' ' + m.scale + '×' : ''})` : '';
+          const segTag = m && m.segment && m.totalSegments ? ` · Seg ${m.segment}/${m.totalSegments}` : '';
+          const frameTag = m && m.frame ? ` · f${m.frame}${m.totalFrames ? '/' + m.totalFrames : ''}` : '';
+          const spfTag = m && m.secPerFrame ? ` · ${m.secPerFrame}s/f` : '';
           const speedTag = m && m.speed ? ` · ${m.speed}` : '';
-          status.textContent = `Procesando ${Math.round(p * 100)}%${stageTag}${frameTag}${speedTag}…`;
+          const etaTag = m ? formatEta(m.etaSec) : '';
+          status.textContent = `Procesando ${Math.round(p * 100)}%${stageTag}${modelTag}${segTag}${frameTag}${spfTag}${speedTag}${etaTag}…`;
         },
       });
       if (result.mode === 'handoff') {
@@ -1131,13 +1149,15 @@
         const resTag = result.width && result.height ? `${result.width}x${result.height}` : (result.pipeline === 'rife' ? 'RIFE_2xFPS' : 'HD');
         const labelTag = result.width && result.height ? `${result.width}×${result.height}` : (result.pipeline === 'rife' ? '2× FPS' : '');
         const name = `${baseName(fileObj.name)}_UPSKALED_${resTag}.${result.ext}`;
-        upResultBlob = result.blob;
-        const sizeMB = (result.blob.size / (1024 * 1024)).toFixed(2);
+        upResultBlob = result.blob || null;
+        const outTarget = result.blob || result.remoteUrl;
+        const outSizeBytes = (result.blob && result.blob.size) || result.sizeBytes || 0;
+        const sizeMB = (outSizeBytes / (1024 * 1024)).toFixed(2);
         setUpscaleDownloadReady(
           true,
           name,
           `⬇ DESCARGAR ${labelTag} (${sizeMB} MB)`,
-          (e) => { e.preventDefault(); downloadBlob(upResultBlob, name); }
+          (e) => { e.preventDefault(); downloadBlob(outTarget, name); }
         );
         const it = result.integrity;
         const itText = it && it.srcFps && it.outFps
@@ -1149,7 +1169,7 @@
         if ($('upskaletorResult')) $('upskaletorResult').style.display = 'block';
         if (window.KapturaComparator && $('upskaletorCompareBox')) {
           const bSrc = mediaPreviewSrc(activeSrc);
-          const aSrc = mediaPreviewSrc(result.blob);
+          const aSrc = mediaPreviewSrc(result.blob || result);
           upBeforeRevoke = bSrc.revoke;
           upAfterRevoke = aSrc.revoke;
           window.KapturaComparator.render($('upskaletorCompareBox'), {
@@ -1165,8 +1185,8 @@
         }
         const autoDl = !skipNextAutoDownload;
         skipNextAutoDownload = false;
-        if (autoDl) downloadBlob(result.blob, name);
-        await saveToVault({ blob: result.blob, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: result.blob.size });
+        if (autoDl) downloadBlob(outTarget, name);
+        await saveToVault({ blob: result.blob || null, remoteUrl: result.remoteUrl || null, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: outSizeBytes });
         if (result.fellBack) toast('MP4 no disponible; guardado WebM real.', 'notice');
         status.textContent = `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;
         toast(`Proceso real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');

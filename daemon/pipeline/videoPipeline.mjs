@@ -6,13 +6,24 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { detectVideoBackend, getOptimalGpuEncoderParams } from "./gpuDirectOptimizer.mjs";
 import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, resolveRifeExecutable, runUpskaletor } from "../providers/adapters.mjs";
 
 const ALLOWED_INPUT_EXTS = new Set([".webm", ".mp4", ".mov", ".mkv", ".avi", ".gif", ".png", ".jpg", ".jpeg", ".webp"]);
 
 const activeTasks = new Map();
+
+function killProcTree(proc) {
+  if (!proc) return;
+  if (process.platform === "win32" && proc.pid) {
+    try {
+      spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, timeout: 4000 });
+      return;
+    } catch {}
+  }
+  try { proc.kill("SIGKILL"); } catch { try { proc.kill(); } catch {} }
+}
 
 function registerTask(taskId) {
   if (!taskId) return null;
@@ -40,14 +51,14 @@ function trackChildProc(taskId, proc) {
   return () => { rec.procs.delete(proc); };
 }
 
-/** Cancel an active GPU transcode/neural task and terminate its child processes cleanly. */
+/** Cancel an active GPU transcode/neural task and terminate its child process tree cleanly. */
 export function cancelTask(taskId) {
   if (!taskId) return { cancelled: false };
   const rec = activeTasks.get(taskId);
   if (!rec) return { cancelled: false };
   rec.aborted = true;
   for (const proc of rec.procs) {
-    try { proc.kill("SIGKILL"); } catch { try { proc.kill(); } catch {} }
+    killProcTree(proc);
   }
   rec.procs.clear();
   return { cancelled: true };
@@ -58,7 +69,7 @@ function evenDim(n) {
   return v & ~1;
 }
 
-function pruneOldExports(outputDir, maxAgeMs = 15 * 60 * 1000, maxFiles = 20) {
+function pruneOldExports(outputDir, maxAgeMs = 60 * 60 * 1000, maxFiles = 20) {
   try {
     if (!fs.existsSync(outputDir)) return;
     const now = Date.now();
@@ -873,9 +884,9 @@ export async function renderVideoTask({
 const IMAGE_AI_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"]);
 
 function runProcessArgs(binPath, args, cwd, opts = {}) {
-  const { taskId = "", onOutputLine = null } = opts || {};
+  const { taskId = "", onOutputLine = null, stallTimeoutMs = 90_000 } = opts || {};
   if (isTaskAborted(taskId)) {
-    return Promise.resolve({ code: -2, aborted: true, stdout: "", stderr: "Cancelled" });
+    return Promise.resolve({ code: -2, aborted: true, stalled: false, stdout: "", stderr: "Cancelled" });
   }
   return new Promise((resolve) => {
     const proc = spawn(binPath, args, { cwd: cwd || undefined, windowsHide: true });
@@ -883,7 +894,30 @@ function runProcessArgs(binPath, args, cwd, opts = {}) {
     let stdout = "";
     let stderr = "";
     let lineBuf = "";
+    let lastActivityAt = Date.now();
+    let stalled = false;
+    let settled = false;
+
+    const watchdog = stallTimeoutMs > 0
+      ? setInterval(() => {
+          if (!settled && Date.now() - lastActivityAt > stallTimeoutMs) {
+            stalled = true;
+            killProcTree(proc);
+          }
+        }, 3000)
+      : null;
+    if (watchdog && typeof watchdog.unref === "function") watchdog.unref();
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (watchdog) clearInterval(watchdog);
+      untrack();
+      resolve(result);
+    };
+
     const pushChunk = (chunk, isErr) => {
+      lastActivityAt = Date.now();
       const s = chunk.toString();
       if (isErr) {
         stderr += s;
@@ -904,8 +938,14 @@ function runProcessArgs(binPath, args, cwd, opts = {}) {
     };
     proc.stdout.on("data", (d) => pushChunk(d, false));
     proc.stderr.on("data", (d) => pushChunk(d, true));
-    proc.on("error", (err) => { untrack(); resolve({ code: 1, stdout, stderr: err.message }); });
-    proc.on("close", (code) => { untrack(); resolve({ code: code ?? 1, aborted: isTaskAborted(taskId), stdout, stderr }); });
+    proc.on("error", (err) => finish({ code: 1, aborted: false, stalled, stdout, stderr: err.message }));
+    proc.on("close", (code) => finish({
+      code: stalled ? -3 : (code ?? 1),
+      aborted: isTaskAborted(taskId),
+      stalled,
+      stdout,
+      stderr: stalled ? `${stderr}\nGPU process stalled (no frame progress for ${Math.round(stallTimeoutMs / 1000)}s)`.trim() : stderr,
+    }));
   });
 }
 
@@ -1020,8 +1060,13 @@ export async function upscaleAiTask({
       const rawOut = path.join(workDir, "neural_out.png");
       const finalOut = `${taskId}.png`;
       const finalPath = path.join(outputDir, finalOut);
-      const aiArgs = ["-i", stagedInput, "-o", rawOut, "-m", modelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png", "-v"];
-      const res = await runProcessArgs(realEsrganPath, aiArgs, binDir, {
+      const buildImgArgs = (tileVal, threadsVal) => [
+        "-i", stagedInput, "-o", rawOut, "-m", modelsDir, "-n", activeModel,
+        "-s", String(safeScale), "-j", threadsVal,
+        ...(tileVal > 0 ? ["-t", String(tileVal)] : []),
+        "-f", "png", "-v",
+      ];
+      const runImgAttempt = (tileVal, threadsVal) => runProcessArgs(realEsrganPath, buildImgArgs(tileVal, threadsVal), binDir, {
         taskId,
         onOutputLine: (line) => {
           const m = /(\d+)[.,]\d+%/.exec(line);
@@ -1031,8 +1076,16 @@ export async function upscaleAiTask({
           }
         },
       });
+      let res = await runImgAttempt(256, "1:1:2");
+      if (res.stalled && !res.aborted && !isTaskAborted(taskId)) {
+        try { if (fs.existsSync(rawOut)) fs.unlinkSync(rawOut); } catch {}
+        res = await runImgAttempt(128, "1:1:1");
+      }
       if (res.aborted || isTaskAborted(taskId)) {
         return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
+      if (res.stalled) {
+        return { success: false, status: "gpu_stalled", error: res.stderr || "Real-ESRGAN image inference stalled." };
       }
       if (res.code !== 0 || !fs.existsSync(rawOut)) {
         return { success: false, status: "ai_failed", error: (res.stderr || "Real-ESRGAN image inference failed").slice(-500) };
@@ -1084,7 +1137,24 @@ export async function upscaleAiTask({
 
     const esrganBinDir = realEsrganPath ? path.dirname(realEsrganPath) : "";
     const esrganModelsDir = esrganBinDir ? path.join(esrganBinDir, "models") : "";
-    const activeModel = needsEsrgan ? resolveNeuralModelName(model, esrganModelsDir, safeScale) : rifeModel;
+    let effectiveModel = needsEsrgan ? resolveNeuralModelName(model, esrganModelsDir, safeScale) : rifeModel;
+    const neededScale = (width > 0 && srcMeta.width > 0) ? Math.ceil(width / srcMeta.width) : safeScale;
+    let effectiveScale = safeScale;
+    if (needsEsrgan) {
+      if (
+        srcMeta.width >= 1200 &&
+        width > 0 &&
+        width <= 3840 &&
+        neededScale <= 2 &&
+        effectiveModel === "realesrgan-x4plus" &&
+        fs.existsSync(path.join(esrganModelsDir, "realesr-animevideov3-x2.param"))
+      ) {
+        effectiveModel = "realesr-animevideov3";
+        effectiveScale = 2;
+      } else if (effectiveModel === "realesr-animevideov3") {
+        effectiveScale = neededScale <= 2 ? 2 : (neededScale === 3 ? 3 : safeScale);
+      }
+    }
 
     const rifeBinDir = rifePath ? path.dirname(rifePath) : "";
     let resolvedRifeModelDir = rifeModel;
@@ -1098,11 +1168,15 @@ export async function upscaleAiTask({
     fs.mkdirSync(segDir, { recursive: true });
     fs.mkdirSync(outSegDir, { recursive: true });
 
+    const segSeconds = Math.max(1.5, Math.min(4, Math.round((90 / Math.max(15, sourceFps)) * 10) / 10));
     const segRes = await runFfmpegArgs(backend.ffmpegPath, [
       "-hide_banner", "-y", "-i", stagedInput,
-      "-c:v", "copy", "-an", "-f", "segment", "-segment_time", "4", "-reset_timestamps", "1",
+      "-c:v", "copy", "-an", "-f", "segment", "-segment_time", String(segSeconds), "-reset_timestamps", "1",
       path.join(segDir, "seg_%04d.mp4"),
-    ]);
+    ], { taskId });
+    if (segRes.aborted || isTaskAborted(taskId)) {
+      return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+    }
     if (segRes.code !== 0) {
       fs.copyFileSync(stagedInput, path.join(segDir, "seg_0000.mp4"));
     }
@@ -1111,11 +1185,15 @@ export async function upscaleAiTask({
       return { success: false, status: "segment_failed", error: "No video segments produced for neural pass." };
     }
 
+    const primaryTile = srcMeta.width >= 1600 ? 200 : (srcMeta.width >= 960 ? 256 : 0);
+    const estTotalFrames = Math.max(1, Math.round(probedDur * sourceFps));
+    let globalFramesDone = 0;
+    const inferStartMs = Date.now();
     const concatList = [];
     for (let i = 0; i < segFiles.length; i++) {
       if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
-      const segBase = 12 + (i / segFiles.length) * 80;
-      const segSpan = 80 / segFiles.length;
+      const segBase = 10 + (i / segFiles.length) * 82;
+      const segSpan = 82 / segFiles.length;
       const segIn = path.join(segDir, segFiles[i]);
       const framesIn = path.join(workDir, `f_in_${i}`);
       fs.mkdirSync(framesIn, { recursive: true });
@@ -1138,32 +1216,78 @@ export async function upscaleAiTask({
       if (needsEsrgan) {
         const framesSr = path.join(workDir, `f_sr_${i}`);
         fs.mkdirSync(framesSr, { recursive: true });
-        let doneFrames = 0;
-        const srBase = segBase;
-        const srSpan = needsRife ? segSpan * 0.5 : segSpan * 0.85;
-        const aiRes = await runProcessArgs(realEsrganPath, [
-          "-i", currentFramesDir, "-o", framesSr, "-m", esrganModelsDir, "-n", activeModel, "-s", String(safeScale), "-f", "png", "-v",
-        ], esrganBinDir, {
-          taskId,
-          onOutputLine: (line) => {
-            if (line.includes("->") && line.includes("done") && typeof onProgress === "function") {
-              doneFrames++;
-              const frac = Math.min(1, doneFrames / rawCount);
-              onProgress({
-                taskId,
-                stage: "ESRGAN",
-                frame: doneFrames,
-                progress: Math.min(91, Math.round(srBase + frac * srSpan)),
-              });
-            }
-          },
-        });
+        const buildEsrganArgs = (tileVal, threadsVal) => [
+          "-i", currentFramesDir, "-o", framesSr,
+          "-m", esrganModelsDir, "-n", effectiveModel,
+          "-s", String(effectiveScale),
+          "-j", threadsVal,
+          ...(tileVal > 0 ? ["-t", String(tileVal)] : []),
+          "-f", "png", "-v",
+        ];
+        const runEsrganAttempt = async (tileVal, threadsVal) => {
+          let doneFrames = 0;
+          let lastEmitAt = 0;
+          const srBase = segBase;
+          const srSpan = needsRife ? segSpan * 0.5 : segSpan * 0.85;
+          const emitEsrganProgress = (subFrac = 0, forceEmit = false) => {
+            if (typeof onProgress !== "function") return;
+            const now = Date.now();
+            if (!forceEmit && now - lastEmitAt < 450) return;
+            lastEmitAt = now;
+            const localFrac = Math.min(1, (doneFrames + subFrac) / rawCount);
+            const completedTotal = globalFramesDone + doneFrames + subFrac;
+            const elapsedSec = Math.max(0.1, (now - inferStartMs) / 1000);
+            const secPerFrame = completedTotal >= 0.5 ? elapsedSec / completedTotal : null;
+            const etaSec = secPerFrame ? Math.round(Math.max(0, estTotalFrames - completedTotal) * secPerFrame) : null;
+            onProgress({
+              taskId,
+              stage: "ESRGAN",
+              frame: doneFrames,
+              totalFrames: rawCount,
+              segment: i + 1,
+              totalSegments: segFiles.length,
+              secPerFrame: secPerFrame ? Number(secPerFrame.toFixed(2)) : null,
+              etaSec,
+              model: effectiveModel,
+              scale: effectiveScale,
+              progress: Math.min(91, Math.round(srBase + localFrac * srSpan)),
+            });
+          };
+          emitEsrganProgress(0, true);
+          return runProcessArgs(realEsrganPath, buildEsrganArgs(tileVal, threadsVal), esrganBinDir, {
+            taskId,
+            stallTimeoutMs: 90_000,
+            onOutputLine: (line) => {
+              if (line.includes("->") && line.includes("done")) {
+                doneFrames++;
+                emitEsrganProgress(0, true);
+                return;
+              }
+              const pctM = /(\d+)[.,](\d+)%/.exec(line);
+              if (pctM) {
+                const sub = Math.min(0.98, (Number(pctM[1]) + Number(pctM[2]) / 100) / 100);
+                emitEsrganProgress(sub, false);
+              }
+            },
+          });
+        };
+
+        let aiRes = await runEsrganAttempt(primaryTile, "1:1:2");
+        if (aiRes.stalled && !aiRes.aborted && !isTaskAborted(taskId)) {
+          fs.rmSync(framesSr, { recursive: true, force: true });
+          fs.mkdirSync(framesSr, { recursive: true });
+          aiRes = await runEsrganAttempt(128, "1:1:1");
+        }
         if (aiRes.aborted || isTaskAborted(taskId)) {
           return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+        }
+        if (aiRes.stalled) {
+          return { success: false, status: "gpu_stalled", error: aiRes.stderr || "Real-ESRGAN stalled without frame progress." };
         }
         if (aiRes.code !== 0) {
           return { success: false, status: "ai_failed", error: (aiRes.stderr || "Real-ESRGAN batch failed").slice(-500) };
         }
+        globalFramesDone += rawCount;
         fs.rmSync(currentFramesDir, { recursive: true, force: true });
         currentFramesDir = framesSr;
       }
@@ -1175,28 +1299,45 @@ export async function upscaleAiTask({
         const inPngs = fs.readdirSync(currentFramesDir).filter((f) => f.endsWith(".png")).sort();
         if (inPngs.length >= 2) {
           const targetCount = inPngs.length * safeMult;
-          let rifeFrames = 0;
-          const rifeBase = needsEsrgan ? (segBase + segSpan * 0.5) : segBase;
-          const rifeSpan = needsEsrgan ? (segSpan * 0.35) : (segSpan * 0.85);
-          const rRes = await runProcessArgs(rifePath, [
-            "-i", currentFramesDir, "-o", framesRife, "-m", resolvedRifeModelDir, "-n", String(targetCount), "-f", "%08d.png", "-v",
-          ], rifeBinDir, {
-            taskId,
-            onOutputLine: (line) => {
-              if (line.includes("->") && line.includes("done") && typeof onProgress === "function") {
-                rifeFrames++;
-                const frac = Math.min(1, rifeFrames / targetCount);
-                onProgress({
-                  taskId,
-                  stage: "RIFE",
-                  frame: rifeFrames,
-                  progress: Math.min(91, Math.round(rifeBase + frac * rifeSpan)),
-                });
-              }
-            },
-          });
+          const runRifeAttempt = async (threadsVal) => {
+            let rifeFrames = 0;
+            const rifeBase = needsEsrgan ? (segBase + segSpan * 0.5) : segBase;
+            const rifeSpan = needsEsrgan ? (segSpan * 0.35) : (segSpan * 0.85);
+            return runProcessArgs(rifePath, [
+              "-i", currentFramesDir, "-o", framesRife, "-m", resolvedRifeModelDir, "-n", String(targetCount), "-j", threadsVal, "-f", "%08d.png", "-v",
+            ], rifeBinDir, {
+              taskId,
+              stallTimeoutMs: 90_000,
+              onOutputLine: (line) => {
+                if (line.includes("->") && line.includes("done") && typeof onProgress === "function") {
+                  rifeFrames++;
+                  const frac = Math.min(1, rifeFrames / targetCount);
+                  onProgress({
+                    taskId,
+                    stage: "RIFE",
+                    frame: rifeFrames,
+                    totalFrames: targetCount,
+                    segment: i + 1,
+                    totalSegments: segFiles.length,
+                    model: rifeModel,
+                    scale: safeMult,
+                    progress: Math.min(91, Math.round(rifeBase + frac * rifeSpan)),
+                  });
+                }
+              },
+            });
+          };
+          let rRes = await runRifeAttempt("1:1:2");
+          if (rRes.stalled && !rRes.aborted && !isTaskAborted(taskId)) {
+            fs.rmSync(framesRife, { recursive: true, force: true });
+            fs.mkdirSync(framesRife, { recursive: true });
+            rRes = await runRifeAttempt("1:1:1");
+          }
           if (rRes.aborted || isTaskAborted(taskId)) {
             return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+          }
+          if (rRes.stalled) {
+            return { success: false, status: "gpu_stalled", error: rRes.stderr || "RIFE stalled without frame progress." };
           }
           if (rRes.code !== 0) {
             return { success: false, status: "rife_failed", error: (rRes.stderr || "RIFE Vulkan interpolation failed").slice(-500) };
@@ -1247,7 +1388,15 @@ export async function upscaleAiTask({
       fs.rmSync(currentFramesDir, { recursive: true, force: true });
 
       if (typeof onProgress === "function") {
-        onProgress({ taskId, stage: `${mode.toUpperCase()}_SEGMENT`, progress: Math.min(92, Math.round(12 + ((i + 1) / segFiles.length) * 80)) });
+        onProgress({
+          taskId,
+          stage: `${mode.toUpperCase()}_SEGMENT`,
+          segment: i + 1,
+          totalSegments: segFiles.length,
+          model: effectiveModel,
+          scale: effectiveScale,
+          progress: Math.min(92, Math.round(10 + ((i + 1) / segFiles.length) * 82)),
+        });
       }
     }
 
@@ -1286,7 +1435,8 @@ export async function upscaleAiTask({
       width: outMeta.width || width,
       height: outMeta.height || height,
       fps: outMeta.fps || targetFps,
-      model: mode === "hybrid" ? `${activeModel}+${rifeModel}` : activeModel,
+      model: mode === "hybrid" ? `${effectiveModel}+${rifeModel}` : effectiveModel,
+      scale: effectiveScale,
       neural: true,
       hardwareAccelerated: true,
       integrity,

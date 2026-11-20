@@ -40,6 +40,7 @@
         neuralAvailable: Boolean((data && data.capabilities && data.capabilities.neuralAvailable) || (data && data.providers && data.providers.realEsrgan)),
         rifeAvailable: Boolean((data && data.capabilities && data.capabilities.rifeAvailable) || (data && data.providers && data.providers.rife)),
         casFilter: Boolean(data && data.capabilities && data.capabilities.casFilter),
+        jobsEndpoint: (data && data.streaming && data.streaming.jobsEndpoint) || null,
         preferredCodec: (data && data.capabilities && data.capabilities.preferredCodec) || null,
         hardwareAccelerated: Boolean(data && data.capabilities && data.capabilities.hardwareAccelerated),
         providers: (data && data.providers) || {},
@@ -129,11 +130,98 @@
     };
   }
 
+  function waitForAsyncJob(taskId, opts) {
+    opts = opts || {};
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let pollTimer = null;
+      let stopSse = () => {};
+
+      const cleanup = () => {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+        stopSse();
+      };
+
+      const finishOk = (job) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(job);
+      };
+
+      const finishErr = (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      };
+
+      const onAbort = () => {
+        cancelTaskViaDaemon(taskId);
+        const ab = new Error('Cancelled by operator');
+        ab.name = 'AbortError';
+        finishErr(ab);
+      };
+
+      if (opts.signal) {
+        if (opts.signal.aborted) { onAbort(); return; }
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const emitJobProgress = (data) => {
+        if (!data || typeof opts.onProgress !== 'function') return;
+        const frac = Math.min(0.99, Math.max(0.02, (Number(data.progress) || 0) / 100));
+        opts.onProgress(frac, data);
+      };
+
+      const checkJobStatus = async () => {
+        if (settled) return;
+        try {
+          const r = await fetch(`${DAEMON_BASE}/jobs/${encodeURIComponent(taskId)}`, { cache: 'no-store' });
+          if (!r.ok) return;
+          const job = await r.json();
+          if (!job || settled) return;
+          if (job.status === 'completed') {
+            if (typeof opts.onProgress === 'function') opts.onProgress(1, { ...job, stage: 'COMPLETE', progress: 100 });
+            finishOk(job);
+          } else if (job.status === 'cancelled') {
+            const ab = new Error('Cancelled by operator');
+            ab.name = 'AbortError';
+            finishErr(ab);
+          } else if (job.status === 'failed') {
+            finishErr(new Error(job.error || 'Daemon :3370 GPU task failed'));
+          } else {
+            emitJobProgress(job);
+          }
+        } catch { /* transient poll glitch; retry next tick */ }
+      };
+
+      stopSse = subscribeTaskProgress(taskId, (frac, evt) => {
+        if (settled) return;
+        if (evt && evt.stage === 'CANCELLED') {
+          const ab = new Error('Cancelled by operator');
+          ab.name = 'AbortError';
+          finishErr(ab);
+          return;
+        }
+        if (typeof opts.onProgress === 'function') opts.onProgress(frac, evt);
+        if (evt && evt.stage === 'COMPLETE') {
+          checkJobStatus();
+        }
+      });
+
+      pollTimer = setInterval(checkJobStatus, 1500);
+      setTimeout(checkJobStatus, 300);
+    });
+  }
+
   async function transcodeViaDaemon(file, opts) {
     opts = opts || {};
     const taskId = opts.taskId || nextTaskId('tx');
     const container = opts.container === 'vp9' || opts.container === 'webm' ? 'webm' : 'mp4';
     const sourceExport = opts.sourceExport || (file && file.remoteUrl) || '';
+    const useAsync = Boolean(cachedHealth && cachedHealth.jobsEndpoint && !opts.forceSync);
     const headers = {
       'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
       'X-Kaptura-Container': container,
@@ -152,13 +240,15 @@
     if (Number(opts.endSec) > 0) headers['X-Kaptura-End-Sec'] = String(opts.endSec);
 
     const keepOnDisk = Boolean(opts.keepOnDisk);
-    if (!keepOnDisk) headers['Accept'] = 'application/octet-stream';
+    if (!keepOnDisk && !useAsync) headers['Accept'] = 'application/octet-stream';
 
     if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
-    const stopSse = subscribeTaskProgress(taskId, opts.onProgress);
+    const stopSse = useAsync ? () => {} : subscribeTaskProgress(taskId, opts.onProgress);
 
     try {
-      const endpoint = keepOnDisk ? `${DAEMON_BASE}/transcode` : `${DAEMON_BASE}/transcode?download=1`;
+      const endpoint = useAsync
+        ? `${DAEMON_BASE}/transcode?async=1`
+        : (keepOnDisk ? `${DAEMON_BASE}/transcode` : `${DAEMON_BASE}/transcode?download=1`);
       const res = await fetch(endpoint, {
         method: 'POST',
         headers,
@@ -168,6 +258,36 @@
       if (!res.ok) {
         const msg = await res.text().catch(() => `HTTP ${res.status}`);
         throw new Error(`Daemon :3370 transcode failed: ${msg}`);
+      }
+
+      if (useAsync) {
+        const accepted = await res.json();
+        const job = await waitForAsyncJob((accepted && accepted.taskId) || taskId, opts);
+        const remoteUrl = job.downloadUrl ? `${DAEMON_BASE}${job.downloadUrl}` : '';
+        let outBlob = null;
+        if (!keepOnDisk && remoteUrl) {
+          const dl = await fetch(remoteUrl, { signal: opts.signal });
+          if (!dl.ok) throw new Error(`Failed to fetch transcoded file (HTTP ${dl.status})`);
+          outBlob = await dl.blob();
+        }
+        return {
+          blob: outBlob,
+          remoteUrl: keepOnDisk ? remoteUrl : '',
+          downloadUrl: job.downloadUrl || '',
+          outputFile: job.outputFile || '',
+          sizeBytes: job.sizeBytes || (outBlob ? outBlob.size : 0),
+          duration: job.duration || 0,
+          ext: container,
+          mime: container === 'webm' ? 'video/webm' : 'video/mp4',
+          width: job.width || opts.width || 0,
+          height: job.height || opts.height || 0,
+          codec: job.codec || (container === 'webm' ? 'libvpx-vp9' : 'h264'),
+          hardwareAccelerated: Boolean(job.hardwareAccelerated),
+          scaleMode: `${job.hardwareAccelerated ? 'NVENC' : 'FFmpeg'} (${job.codec || 'h264'})`,
+          integrity: job.integrity || null,
+          fellBack: false,
+          viaDaemon: true,
+        };
       }
 
       if (keepOnDisk) {
@@ -435,6 +555,8 @@
     const sourceExport = opts.sourceExport || (file && file.remoteUrl) || '';
     const isImg = /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test((file && file.name) || sourceExport) || (file && file.type && file.type.startsWith('image/'));
     const pipeline = opts.pipeline || 'esrgan';
+    const keepOnDisk = Boolean(opts.keepOnDisk && !isImg);
+    const useAsync = Boolean(cachedHealth && cachedHealth.jobsEndpoint && !opts.forceSync);
     const headers = {
       'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
       'X-Kaptura-Pipeline': pipeline,
@@ -443,8 +565,8 @@
       'X-Kaptura-Rife-Mult': String(opts.rifeMult || 2),
       'X-Kaptura-Quality': opts.quality || 'high',
       'X-Kaptura-Task-Id': taskId,
-      'Accept': 'application/octet-stream',
     };
+    if (!useAsync && !keepOnDisk) headers['Accept'] = 'application/octet-stream';
     if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
     if (opts.width) headers['X-Kaptura-Width'] = String(opts.width);
     if (opts.height) headers['X-Kaptura-Height'] = String(opts.height);
@@ -454,10 +576,13 @@
     }
 
     if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
-    const stopSse = subscribeTaskProgress(taskId, opts.onProgress);
+    const stopSse = useAsync ? () => {} : subscribeTaskProgress(taskId, opts.onProgress);
 
     try {
-      const res = await fetch(`${DAEMON_BASE}/upscale-ai?download=1`, {
+      const endpoint = useAsync
+        ? `${DAEMON_BASE}/upscale-ai?async=1`
+        : `${DAEMON_BASE}/upscale-ai?download=1`;
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: sourceExport ? new Uint8Array(0) : file,
@@ -467,6 +592,43 @@
         const errText = await res.text().catch(() => `HTTP ${res.status}`);
         throw new Error(`Daemon :3370 neural upscale failed: ${errText}`);
       }
+
+      if (useAsync) {
+        const accepted = await res.json();
+        const job = await waitForAsyncJob((accepted && accepted.taskId) || taskId, opts);
+        const remoteUrl = job.downloadUrl ? `${DAEMON_BASE}${job.downloadUrl}` : '';
+        let outBlob = null;
+        if (!keepOnDisk && remoteUrl) {
+          const dl = await fetch(remoteUrl, { signal: opts.signal });
+          if (!dl.ok) throw new Error(`Failed to fetch neural artifact (HTTP ${dl.status})`);
+          outBlob = await dl.blob();
+        }
+        const ext = isImg ? 'png' : 'mp4';
+        const modelUsed = job.model || opts.model || 'realesrgan-x4plus';
+        const pipeUsed = job.pipeline || pipeline;
+        const modeTag = pipeUsed === 'rife'
+          ? `RIFE v4.6 (${opts.rifeMult || 2}× FPS)`
+          : (pipeUsed === 'hybrid' ? `Real-ESRGAN (${modelUsed}) + RIFE v4.6` : `Real-ESRGAN (${modelUsed})`);
+        return {
+          blob: outBlob,
+          remoteUrl: keepOnDisk ? remoteUrl : '',
+          downloadUrl: job.downloadUrl || '',
+          outputFile: job.outputFile || '',
+          sizeBytes: job.sizeBytes || (outBlob ? outBlob.size : 0),
+          mime: isImg ? 'image/png' : 'video/mp4',
+          ext,
+          pipeline: pipeUsed,
+          width: job.width || opts.width || 0,
+          height: job.height || opts.height || 0,
+          model: modelUsed,
+          scaleMode: modeTag,
+          integrity: job.integrity || null,
+          neural: true,
+          fellBack: false,
+          viaDaemon: true,
+        };
+      }
+
       const blob = await res.blob();
       if (typeof opts.onProgress === 'function') opts.onProgress(1, { taskId, stage: 'COMPLETE' });
       const ext = isImg ? 'png' : 'mp4';

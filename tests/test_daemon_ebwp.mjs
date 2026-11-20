@@ -53,11 +53,14 @@ async function run() {
     assert.equal(typeof health.capabilities.neuralAvailable, "boolean", "Daemon /health must report neuralAvailable capability");
     assert.equal(health.capabilities && typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
     assert.equal(health.streaming && health.streaming.cancelEndpoint, "/cancel", "Daemon /health must expose /cancel endpoint");
+    assert.equal(health.streaming && health.streaming.jobsEndpoint, "/jobs", "Daemon /health must expose /jobs endpoint");
     const cancelMissRes = await httpRequest(port, "/cancel/nonexistent_task", "POST");
     assert.equal(cancelMissRes.status, 200);
     const cancelMissJson = JSON.parse(cancelMissRes.body.toString("utf8"));
     assert.equal(cancelMissJson.ok, true);
     assert.equal(cancelMissJson.cancelled, false);
+    const jobMissRes = await httpRequest(port, "/jobs/nonexistent_job");
+    assert.equal(jobMissRes.status, 404, "GET /jobs/:unknown must return 404");
     assert.equal(typeof health.providers.realEsrgan, "boolean", "Daemon /health must report realEsrgan provider availability");
     assert.equal(typeof health.providers.rife, "boolean", "Daemon /health must report rife provider availability");
 
@@ -194,6 +197,29 @@ async function run() {
         assert.equal(aiOkRes.status, 200, "POST /upscale-ai must succeed with real PNG output when neuralAvailable is true");
         assert.equal(aiOkRes.body.subarray(0, 4).toString("hex"), "89504e47", "Neural output must be a valid PNG");
         assert.ok(aiOkRes.body.length > tinyPng.length, "4x neural output PNG must be larger than 4x4 input PNG");
+
+        // Test async ?async=1 job queue & polling
+        const asyncRes = await httpRequest(
+          port,
+          "/upscale-ai?async=1",
+          "POST",
+          { "X-Kaptura-Ext": ".png", "X-Kaptura-Ai-Model": "realesr-animevideov3", "X-Kaptura-Scale": "4" },
+          tinyPng
+        );
+        assert.equal(asyncRes.status, 202, "POST /upscale-ai?async=1 must return 202 Accepted");
+        const asyncJson = JSON.parse(asyncRes.body.toString("utf8"));
+        assert.ok(asyncJson.taskId && asyncJson.pollUrl);
+        let polledJob = null;
+        for (let attempt = 0; attempt < 300; attempt++) {
+          const jr = await httpRequest(port, asyncJson.pollUrl);
+          assert.equal(jr.status, 200);
+          polledJob = JSON.parse(jr.body.toString("utf8"));
+          if (polledJob.status === "completed" || polledJob.status === "failed" || polledJob.status === "cancelled") break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        assert.equal(polledJob && polledJob.status, "completed", `Async /upscale-ai job must complete cleanly: ${JSON.stringify(polledJob)}`);
+        assert.ok(polledJob.downloadUrl, "Completed async job must provide downloadUrl");
+        if (polledJob.videoPath) createdArtifacts.push(polledJob.videoPath);
       }
 
       if (!health.capabilities.rifeAvailable) {
@@ -272,8 +298,8 @@ async function run() {
     const exportsDir = new URL("../exports", import.meta.url);
     if (fs.existsSync(exportsDir)) {
       for (const f of fs.readdirSync(exportsDir)) {
-        if (f.startsWith("transcode_") || f.startsWith("render_") || f.startsWith("trim_") || f.startsWith("capture_")) {
-          try { fs.unlinkSync(new URL(`../exports/${f}`, import.meta.url)); } catch {}
+        if (f.startsWith("transcode_") || f.startsWith("render_") || f.startsWith("trim_") || f.startsWith("capture_") || f.startsWith("up_") || f.startsWith("tx_") || f.startsWith(".tmp_up_") || f.startsWith(".tmp_upload_up_") || f.startsWith(".tmp_tx_") || f.startsWith(".tmp_upload_tx_")) {
+          try { fs.rmSync(new URL(`../exports/${f}`, import.meta.url), { recursive: true, force: true }); } catch {}
         }
       }
     }

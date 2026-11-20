@@ -107,15 +107,18 @@
             height: profile.h || 0,
             denoise: Boolean(profile.denoise),
             sharpen: hasSharpenOpt ? resolvedSharpen : undefined,
+            keepOnDisk: !isImg,
             quality: 'high',
             taskId: opts.taskId,
             signal: opts.signal,
             onProgress: opts.onProgress,
           });
-          if (aiRes && aiRes.blob) {
+          if (aiRes && (aiRes.blob || aiRes.remoteUrl)) {
             return {
               mode: 'processed',
-              blob: aiRes.blob,
+              blob: aiRes.blob || null,
+              remoteUrl: aiRes.remoteUrl || '',
+              sizeBytes: aiRes.sizeBytes || (aiRes.blob ? aiRes.blob.size : 0),
               ext: aiRes.ext,
               pipeline: aiRes.pipeline || pipe,
               width: aiRes.width || profile.w || 0,
@@ -197,6 +200,7 @@
           quality: 'max',
           sharpen: resolvedSharpen,
           cfr: Boolean(profile.cfr),
+          keepOnDisk: true,
           taskId: opts.taskId,
           signal: opts.signal,
           onProgress: opts.onProgress,
@@ -223,7 +227,9 @@
 
     return {
       mode: 'processed',
-      blob: result.blob,
+      blob: result.blob || null,
+      remoteUrl: result.remoteUrl || '',
+      sizeBytes: result.sizeBytes || (result.blob ? result.blob.size : 0),
       ext: result.ext,
       width: result.width,
       height: result.height,
