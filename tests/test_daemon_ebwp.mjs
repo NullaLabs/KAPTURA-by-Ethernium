@@ -50,6 +50,7 @@ async function run() {
     const health = JSON.parse(healthRes.body.toString("utf8"));
     assert.equal(health.online, true);
     assert.equal(health.port, port);
+    assert.equal(health.version, fs.readFileSync(new URL("../VERSION", import.meta.url), "utf8").trim(), "Daemon /health version must match VERSION file");
     assert.equal(typeof health.capabilities.neuralAvailable, "boolean", "Daemon /health must report neuralAvailable capability");
     assert.equal(health.capabilities && typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
     assert.equal(health.streaming && health.streaming.cancelEndpoint, "/cancel", "Daemon /health must expose /cancel endpoint");

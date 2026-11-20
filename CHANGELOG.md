@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1.0
+
+- introduces the asynchronous GPU job queue (`?async=1` -> `202 Accepted`, `GET /jobs/:taskId`, `streaming.jobsEndpoint: "/jobs"`), disables HTTP request/socket timeouts (`requestTimeout = 0`), streams uploads up to 2 GB directly to disk (`streamRequestToFile`), and keeps large video upscales disk-backed via `/exports/*`;
+- achieves a measured 137x neural video speedup on `1080p -> 4K` (down to `0.39–0.72 s/frame` vs `98.96 s/frame`) by auto-selecting native `realesr-animevideov3 -s 2` (`>=1200px` video targeting `<=3840px`) with adaptive tiling, `-j 1:1:2`, a `90s` stall watchdog + conservative `-t 128 -j 1:1:1` retry, intra-frame progress, and live `Seg / fN/M / s/f / ETA` telemetry;
+- adds mid-flight cancelable GPU tasks (`POST /cancel/:taskId` with Windows process-tree `taskkill /T /F` and clean cancellation on daemon `stop()`), granular SSE frame progress, and the `#btnCancelUpscale` control;
+- adds multi-scale WebGL and video detail recovery (`#upskaletorDetailSelect`), automatic neural promotion when local Vulkan engines are online, and `4x` auto-zoom loupe snapping in the Forensic Optical Inspector (`js/comparator.js`);
+- ships the verified visual showcase gallery (`docs/showcase/`), `RIFE v4.6` `2x` temporal interpolation demo, and EN/ES Launch Kit (`LAUNCH_KIT.md`).
+
 ## 3.0.0
 
 - upgrades the UI to a Liquid Glass 3D Obsidian chassis with highlighted header Download Pro buttons, readiness indicators, profile intent hints, and a 1-click permissionless **Forensic Demo** (`480x270 -> 3840x2160`);

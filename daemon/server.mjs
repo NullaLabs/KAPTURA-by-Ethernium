@@ -20,6 +20,13 @@ import { attachWebSocketServer } from "./synkronia/wsServer.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, "..");
+const DAEMON_VERSION = (() => {
+  try {
+    return fs.readFileSync(path.join(DEFAULT_ROOT, "VERSION"), "utf8").trim() || "3.1.0";
+  } catch {
+    return "3.1.0";
+  }
+})();
 
 const MIME_MAP = {
   ".html": "text/html; charset=utf-8",
@@ -182,7 +189,7 @@ export function createKapturaDaemon({
       online: true,
       status: "online",
       engine: "KAPTURA SOVEREIGN STUDIO + GPU DAEMON",
-      version: "3.0.0",
+      version: DAEMON_VERSION,
       port: activePort,
       capabilities: {
         ffmpegAvailable: backend.available,
@@ -868,6 +875,6 @@ const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === path.r
 if (isEntrypoint) {
   const daemon = createKapturaDaemon({ connectIpc: true });
   daemon.start().then(({ host, port }) => {
-    console.log(`[KAPTURA DAEMON v2.0] Studio + GPU Pipeline listening on http://${host}:${port}`);
+    console.log(`[KAPTURA DAEMON v${DAEMON_VERSION}] Studio + GPU Pipeline listening on http://${host}:${port}`);
   });
 }

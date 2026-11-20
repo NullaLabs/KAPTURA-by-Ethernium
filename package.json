@@ -1,6 +1,6 @@
 {
   "name": "kaptura-by-ethernium",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Local-first CHRONO capture studio with real in-browser transcoding (Lanczos + native GIF89a), unified GPU NVENC daemon (:3370), and an honest handoff to the independent UPSKALETOR engine.",
   "type": "commonjs",
   "scripts": {

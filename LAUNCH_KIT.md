@@ -1,4 +1,4 @@
-# 🚀 KAPTURA by Ethernium — Official Launch Kit (v3.0.0)
+# 🚀 KAPTURA by Ethernium — Official Launch Kit (v3.1.0)
 
 > **CHRONO Capture Studio · Real In-Browser Transcoding, Local GPU Daemon (`:3370`), 3-Motor Pipeline & Forensic Optical Inspector**
 >
@@ -38,7 +38,7 @@ Reproducible locally via `npm run benchmark` against an independent `1280×720 @
 
 ## 📢 Ready-to-Publish Launch Copy (EN & ES)
 
-### 1. GitHub Release Notes (v3.0.0+)
+### 1. GitHub Release Notes (v3.1.0)
 
 #### English
 ```markdown
@@ -48,6 +48,7 @@ Try the Zero-Install Static Studio directly in your browser:
 https://nullalabs.github.io/KAPTURA-by-Ethernium/
 
 ### Highlights
+- **v3.1.0 Async GPU Queue & 137x Neural Video Speedup:** Asynchronous `?async=1` / `GET /jobs/:taskId` queue with zero HTTP request/socket timeouts, streaming disk uploads up to 2 GB, disk-backed large video downloads, `90s` GPU stall watchdog with conservative retry, live `Seg / fN/M / s/f / ETA` progress, dual-scale detail recovery, and auto-selected native `realesr-animevideov3 -s 2` on `1080p -> 4K` (`0.39–0.72 s/frame`).
 - **Real In-Browser Media Studio:** Screen/tab capture, WebCodecs/MediaRecorder transcoding, budget-targeted Smart Compressor, pure JavaScript GIF89a encoder (`median-cut` + `Floyd-Steinberg` + `LZW` + temporal sub-rect optimization), and SVG path vectorizer (`<path>` / SMIL flip-book).
 - **Forensic Optical Inspector (`SPLIT A/B`, `Δ ×8 HEATMAP`, `SIDE×SIDE`):** Native Hi-DPI comparison with `1×–8×` loupe auto-snap, frame stepping (`-1f` / `+1f`), live Sobel edge sharpness percentage, mean pixel delta, and daemon header telemetry.
 - **Optional Local GPU Daemon (`127.0.0.1:3370`):** WebSocket capture straight to disk (`RFC 6455`, zero external npm deps), NVENC/AMF/QSV hardware transcoding, AMD FidelityFX `cas`, Real-ESRGAN Vulkan, RIFE v4.6 temporal interpolation, granular frame-by-frame SSE progress, and clean mid-flight operator cancelation (`POST /cancel/:taskId`).
@@ -62,6 +63,7 @@ Prueba el estudio estático Zero-Install directamente en tu navegador:
 https://nullalabs.github.io/KAPTURA-by-Ethernium/
 
 ### Novedades principales
+- **Cola GPU Asíncrona v3.1.0 y Aceleración Neural 137× en Vídeo:** Cola `?async=1` / `GET /jobs/:taskId` sin timeouts HTTP, streaming a disco hasta 2 GB, descarga directa desde `/exports/*`, watchdog anti-cuelgue (`90s`) con reintento conservador, progreso vivo (`Seg / fN/M / s/f / ETA`), recuperación de nitidez dual-scale y modelo nativo `realesr-animevideov3 -s 2` en `1080p -> 4K` (`0.39–0.72 s/frame`).
 - **Estudio multimedia real en navegador:** Captura de pantalla/pestaña, transcodificación WebCodecs/MediaRecorder, compresor inteligente por presupuesto MB, codificador GIF89a puro en JavaScript (`median-cut` + `Floyd-Steinberg` + `LZW` con optimización temporal) y vectorizador SVG real.
 - **Inspector Óptico Forense (`SPLIT A/B`, `Δ ×8 HEATMAP`, `SIDE×SIDE`):** Comparación Hi-DPI nativa con lupa `1×–8×`, salto exacto frame a frame, cálculo real de nitidez Sobel (`+%`) y delta medio por píxel.
 - **GPU Daemon Local Opcional (`127.0.0.1:3370`):** Captura directa a disco por WebSocket (`RFC 6455`, cero dependencias npm externas), NVENC/AMF/QSV, AMD FidelityFX `cas`, Real-ESRGAN Vulkan, RIFE v4.6 (`2× FPS`), progreso SSE por fotograma y cancelación limpia (`POST /cancel/:taskId`).

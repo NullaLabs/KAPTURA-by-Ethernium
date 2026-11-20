@@ -13,6 +13,7 @@ PACKAGE_FILES = (
     "package.json",
     "README.md",
     "BENCHMARK_PROOF.md",
+    "LAUNCH_KIT.md",
     "UPSKALETOR-HANDOFF.md",
     "CHANGELOG.md",
     "LICENSE",
