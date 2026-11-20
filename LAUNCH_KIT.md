@@ -8,10 +8,10 @@
 
 ## 🖼️ Visual Showcase Gallery
 
-### 1. Interactive Forensic Optical Inspector (`SPLIT A/B` · `2×` Magnification)
-![KAPTURA Studio SPLIT A/B 2x Optical Inspector](docs/showcase/kaptura-studio-live.png)
+### 1. Interactive Forensic Optical Inspector (`SPLIT A/B` · `4×` Real-ESRGAN x4plus)
+![KAPTURA Studio SPLIT A/B 4x Optical Inspector](docs/showcase/kaptura-studio-live.png)
 
-### 2. Amplified `Δ ×8 HEATMAP` & Live Sobel / Pixel Telemetry (`+15.2%` Sharpness Gain)
+### 2. Amplified `Δ ×8 HEATMAP` & Live Sobel / Pixel Telemetry (`+20.9%` Sharpness · `Δ 12.36/255`)
 ![KAPTURA Forensic Delta 8x Thermal Heatmap](docs/showcase/kaptura-heatmap-delta8x.png)
 
 ### 3. Real `RIFE v4.6` Vulkan 2× Temporal Interpolation vs Stepped Source
@@ -25,12 +25,12 @@ Reproducible locally via `npm run benchmark` against an independent `1280×720 @
 
 | Engine / Pipeline | Output Stream | SSIM ↑ | PSNR (dB) ↑ | VMAF ↑ | FPS Drift ↓ | Duration Drift | Audio AAC | GPU Time |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.44s |
-| **Motor 1: Lanczos-3 + CAS (`h264_nvenc`)** | `1280x720 @ 30fps` | **0.5869** | **21.21** | **56.91** | **0%** | **0 ms** | **PRESERVED** | **0.81s** |
-| **Motor 2: Real-ESRGAN `x4plus` (Vulkan)** | `1280x720 @ 30fps` | **0.7290** | 20.83 | 35.41 | 0% | 10 ms | PRESERVED | 62.68s |
-| **Motor 2 Fast: Real-ESRGAN `v3` (Vulkan)** | `1280x720 @ 30fps` | 0.6165 | 19.81 | 22.70 | 0% | 10 ms | PRESERVED | 6.59s |
-| **Motor 3: RIFE v4.6 `2×` FPS (Vulkan)** | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | **0%** | 10 ms | PRESERVED | 3.68s |
-| **HYBRID ULTRA: ESRGAN `v3` + RIFE `v4.6`** | `1280x720 @ 60fps` | 0.6166 | 19.81 | 22.68 | **0%** | 10 ms | PRESERVED | 16.01s |
+| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.34s |
+| **Motor 1: Lanczos-3 + Multi-Scale CAS (`h264_nvenc`)** | `1280x720 @ 30fps` | **0.5867** | **21.37** | **62.39** | **0%** | **0 ms** | **PRESERVED** | **0.64s** |
+| **Motor 2: Real-ESRGAN `x4plus` (Vulkan)** | `1280x720 @ 30fps` | **0.7356** | 20.75 | 36.66 | 0% | 10 ms | PRESERVED | 18.68s |
+| **Motor 2 Fast: Real-ESRGAN `v3` (Vulkan)** | `1280x720 @ 30fps` | 0.6141 | 19.76 | 23.39 | 0% | 10 ms | PRESERVED | 8.15s |
+| **Motor 3: RIFE v4.6 `2×` FPS (Vulkan)** | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | **0%** | 10 ms | PRESERVED | 6.09s |
+| **HYBRID ULTRA: ESRGAN `v3` + RIFE `v4.6`** | `1280x720 @ 60fps` | 0.6145 | 19.76 | 23.37 | **0%** | 10 ms | PRESERVED | 20.52s |
 
 > **Honest Architecture Boundary:** Public KAPTURA runs real in-browser capture, transcoding, pure-JS GIF89a encoding (`median-cut` + `Floyd-Steinberg` + `LZW`), SVG vector tracing, WebGL Lanczos-3 + CAS, and client Sobel/Δ×8 inspection with zero external CDNs or telemetry. When local `realesrgan-ncnn-vulkan` / `rife-ncnn-vulkan` or the optional private companion `UPSKALETOR` for authorized operators are present, the local `:3370` daemon executes them natively on GPU with operator cancelation (`POST /cancel/:taskId`) and frame-level SSE progress; otherwise KAPTURA hands off the untouched master and signed CLI command without faking progress bars.
 
@@ -77,18 +77,18 @@ https://nullalabs.github.io/KAPTURA-by-Ethernium/
 > No cloud uploads. No fake AI progress bars. Try it in Chrome/Edge: https://nullalabs.github.io/KAPTURA-by-Ethernium/
 >
 > **2/3** Most upscalers shrink both clips into a tiny player so every output looks identical.
-> KAPTURA compares native Hi-DPI buffers with a draggable curtain, amplifies per-pixel deltas `×8` thermally, measures Sobel edge gain (`+15.2%`), and audits daemon headers (`X-Kaptura-Out-Res`, `X-Kaptura-Out-Fps`, audio AAC, duration drift).
+> KAPTURA compares native Hi-DPI buffers with a draggable curtain, auto-snaps loupe `4×` on 4K outputs, amplifies per-pixel deltas `×8` thermally, measures Sobel edge gain (`+20.9%` / `+21.0%`), and audits daemon headers (`X-Kaptura-Out-Res`, `X-Kaptura-Out-Fps`, audio AAC, duration drift).
 >
-> **3/3** Run `node daemon/server.mjs` locally for NVENC + AMD FidelityFX `cas` (`VMAF 56.91` in `0.81s`), Real-ESRGAN Vulkan (`SSIM 0.7290`), RIFE v4.6 `2× FPS`, live frame-by-frame SSE progress, & clean GPU process cancelation.
+> **3/3** Run `node daemon/server.mjs` locally for NVENC + Multi-Scale `cas` (`VMAF 62.39` in `0.64s`), Real-ESRGAN Vulkan (`SSIM 0.7356`), RIFE v4.6 `2× FPS`, live frame-by-frame SSE progress, & clean GPU process cancelation.
 > Repo + reproducible SSIM/PSNR/VMAF suite: https://github.com/NullaLabs/KAPTURA-by-Ethernium
 
 **ES (Hilo):**
 > **1/3** Lanzamos **KAPTURA v3.0**: estudio de captura 100% local Zero-Install + GPU Daemon opcional (`:3370`) + **Inspector Óptico Forense** (`SPLIT A/B`, mapa térmico `Δ ×8`, lupa `1×–8×` y cálculo real de nitidez Sobel).
 > Cero nube. Cero barras falsas. Pruébalo directo: https://nullalabs.github.io/KAPTURA-by-Ethernium/
 >
-> **2/3** Comparar vídeos `720p` y `4K` encogidos en una caja engaña al ojo. KAPTURA muestra un mapa térmico `Δ ×8` real píxel a píxel, mide ganancia de bordes Sobel en cliente y audita cada cabecera de salida del daemon (FPS, drift temporal en ms y pista AAC).
+> **2/3** Comparar vídeos `720p` y `4K` encogidos en una caja engaña al ojo. KAPTURA muestra un mapa térmico `Δ ×8` real píxel a píxel, engancha zoom `4×` en 4K, mide ganancia Sobel (`+20.9%`) y audita cada cabecera de salida del daemon (FPS, drift temporal en ms y pista AAC).
 >
-> **3/3** Con el daemon local `:3370`: NVENC + `cas` (`VMAF 56.91` en `0.81s`), Real-ESRGAN Vulkan (`SSIM 0.7290`), RIFE v4.6 `2× FPS`, progreso SSE por frame y cancelación inmediata de GPU.
+> **3/3** Con el daemon local `:3370`: NVENC + `unsharp+cas` (`VMAF 62.39` en `0.64s`), Real-ESRGAN Vulkan (`SSIM 0.7356`), RIFE v4.6 `2× FPS`, progreso SSE por frame y cancelación inmediata de GPU.
 > Código y prueba Ground-Truth reproducible: https://github.com/NullaLabs/KAPTURA-by-Ethernium
 
 ---

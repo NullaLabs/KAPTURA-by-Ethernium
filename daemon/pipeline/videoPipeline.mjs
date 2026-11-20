@@ -400,17 +400,24 @@ export async function transcodeMediaTask({
     const outputPath = path.join(outputDir, outputFile);
 
     const filters = [];
-    if (width > 0 && height > 0) {
-      filters.push(`scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos`);
-    } else if (width > 0) {
-      filters.push(`scale=${evenDim(width)}:-2:flags=lanczos`);
+    const outW = width > 0 ? evenDim(width) : 0;
+    const scaleRatio = (srcMeta.width > 0 && outW > 0) ? (outW / srcMeta.width) : 1;
+    if (outW > 0 && height > 0) {
+      filters.push(`scale=${outW}:${evenDim(height)}:flags=lanczos`);
+    } else if (outW > 0) {
+      filters.push(`scale=${outW}:-2:flags=lanczos`);
     }
     const sharpNum = Number(sharpen) || 0;
     if (sharpNum > 0) {
+      if (scaleRatio > 1.15) {
+        const msize = scaleRatio >= 2.5 ? 7 : 5;
+        const lumaAmt = Math.min(1.65, Math.max(0.35, sharpNum * 1.45)).toFixed(2);
+        filters.push(`unsharp=${msize}:${msize}:${lumaAmt}:5:5:0.0`);
+      }
       if (backend.filters && backend.filters.cas) {
-        const casStr = Math.min(1.0, Math.max(0.15, sharpNum)).toFixed(2);
+        const casStr = Math.min(1.0, Math.max(0.20, sharpNum * 0.90)).toFixed(2);
         filters.push(`cas=strength=${casStr}`);
-      } else {
+      } else if (scaleRatio <= 1.15) {
         const amt = Math.min(1.5, Math.max(0.25, sharpNum * 1.4)).toFixed(2);
         filters.push(`unsharp=5:5:${amt}:5:5:0.0`);
       }
@@ -932,6 +939,7 @@ export async function upscaleAiTask({
   width = 0,
   height = 0,
   denoise = false,
+  sharpen = null,
   quality = "high",
   taskId: providedTaskId = "",
   onProgress,
@@ -995,6 +1003,11 @@ export async function upscaleAiTask({
     const backend = detectVideoBackend();
     const safeScale = scale === 2 || scale === 3 ? scale : 4;
     const safeMult = Math.max(2, Math.min(4, Math.round(Number(rifeMult) || 2)));
+    const hasExplicitSharp = sharpen !== null && sharpen !== undefined && Number.isFinite(Number(sharpen));
+    const effectiveSharp = hasExplicitSharp ? Math.max(0, Number(sharpen)) : (needsEsrgan ? 0.35 : 0);
+    const casPostStrength = effectiveSharp > 0 && backend.filters && backend.filters.cas
+      ? Math.min(0.60, Math.max(0.15, hasExplicitSharp ? effectiveSharp * 0.45 : effectiveSharp))
+      : 0;
 
     if (isImage) {
       if (!realEsrganPath) {
@@ -1025,9 +1038,11 @@ export async function upscaleAiTask({
         return { success: false, status: "ai_failed", error: (res.stderr || "Real-ESRGAN image inference failed").slice(-500) };
       }
 
-      if (width > 0 && backend.available && backend.ffmpegPath) {
-        const filters = [height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`];
-        if (denoise) filters.unshift("hqdn3d=1.2:1.2:4:4");
+      if ((width > 0 || denoise || casPostStrength > 0) && backend.available && backend.ffmpegPath) {
+        const filters = [];
+        if (denoise) filters.push("hqdn3d=1.2:1.2:4:4");
+        if (width > 0) filters.push(height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`);
+        if (casPostStrength > 0) filters.push(`cas=strength=${casPostStrength.toFixed(2)}`);
         await runFfmpegArgs(backend.ffmpegPath, ["-hide_banner", "-y", "-i", rawOut, "-vf", filters.join(","), finalPath], { taskId });
         if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
       } else {
@@ -1204,6 +1219,9 @@ export async function upscaleAiTask({
       if (denoise) vfList.push("hqdn3d=1.1:1.1:3.5:3.5");
       if (width > 0) {
         vfList.push(height > 0 ? `scale=${evenDim(width)}:${evenDim(height)}:flags=lanczos` : `scale=${evenDim(width)}:-2:flags=lanczos`);
+      }
+      if (casPostStrength > 0) {
+        vfList.push(`cas=strength=${casPostStrength.toFixed(2)}`);
       }
       const segEncArgs = [
         "-hide_banner", "-y", "-start_number", String(startNumber), "-framerate", String(targetFps),

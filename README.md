@@ -14,9 +14,9 @@ La resolución, frecuencia y códec efectivos dependen del navegador, el sistema
 
 ## 📸 Visual Showcase & Launch Kit
 
-| Forensic Optical Inspector (`SPLIT A/B` · `2×`) | `Δ ×8 HEATMAP` & Telemetría Sobel (`+15.2%`) | `RIFE v4.6` Vulkan (`2×` FPS Interpolación) |
+| Forensic Optical Inspector (`SPLIT A/B` · `4×` Real-ESRGAN) | `Δ ×8 HEATMAP` & Sobel (`+20.9%` · `Δ 12.36`) | `RIFE v4.6` Vulkan (`2×` FPS Interpolación) |
 | :---: | :---: | :---: |
-| ![SPLIT A/B 2x](docs/showcase/kaptura-studio-live.png) | ![Delta 8x Heatmap](docs/showcase/kaptura-heatmap-delta8x.png) | ![RIFE 2x Comparison](docs/showcase/rife-30-vs-60fps.gif) |
+| ![SPLIT A/B 4x](docs/showcase/kaptura-studio-live.png) | ![Delta 8x Heatmap](docs/showcase/kaptura-heatmap-delta8x.png) | ![RIFE 2x Comparison](docs/showcase/rife-30-vs-60fps.gif) |
 
 Para material completo de difusión, capturas de alta resolución y plantillas de lanzamiento EN/ES (Release Notes, X, Reddit, Show HN), consulta [**LAUNCH_KIT.md**](LAUNCH_KIT.md).
 
@@ -67,12 +67,12 @@ Resultados reales ejecutados con [`npm run benchmark`](scripts/benchmark_upskale
 
 | Motor / Pipeline | Salida | SSIM ↑ | PSNR (dB) ↑ | VMAF ↑ | FPS Drift ↓ | Duration Drift | Audio AAC | Tiempo GPU |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.44s |
-| **Motor 1: Lanczos-3 + CAS (`h264_nvenc`)** | `1280x720 @ 30fps` | **0.5869** | **21.21** | **56.91** | **0%** | **0 ms** | **PRESERVED** | **0.81s** |
-| **Motor 2: Real-ESRGAN `x4plus` (Vulkan)** | `1280x720 @ 30fps` | **0.7290** | 20.83 | 35.41 | 0% | 10 ms | PRESERVED | 62.68s |
-| **Motor 2 Fast: Real-ESRGAN `v3` (Vulkan)** | `1280x720 @ 30fps` | 0.6165 | 19.81 | 22.70 | 0% | 10 ms | PRESERVED | 6.59s |
-| **Motor 3: RIFE v4.6 2× FPS (Vulkan)** | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | **0%** | 10 ms | PRESERVED | 3.68s |
-| **HYBRID ULTRA: ESRGAN `v3` + RIFE v4.6** | `1280x720 @ 60fps` | 0.6166 | 19.81 | 22.68 | **0%** | 10 ms | PRESERVED | 16.01s |
+| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.34s |
+| **Motor 1: Lanczos-3 + Multi-Scale CAS (`h264_nvenc`)** | `1280x720 @ 30fps` | **0.5867** | **21.37** | **62.39** | **0%** | **0 ms** | **PRESERVED** | **0.64s** |
+| **Motor 2: Real-ESRGAN `x4plus` (Vulkan)** | `1280x720 @ 30fps` | **0.7356** | 20.75 | 36.66 | 0% | 10 ms | PRESERVED | 18.68s |
+| **Motor 2 Fast: Real-ESRGAN `v3` (Vulkan)** | `1280x720 @ 30fps` | 0.6141 | 19.76 | 23.39 | 0% | 10 ms | PRESERVED | 8.15s |
+| **Motor 3: RIFE v4.6 2× FPS (Vulkan)** | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | **0%** | 10 ms | PRESERVED | 6.09s |
+| **HYBRID ULTRA: ESRGAN `v3` + RIFE v4.6** | `1280x720 @ 60fps` | 0.6145 | 19.76 | 23.37 | **0%** | 10 ms | PRESERVED | 20.52s |
 
 * **Higiene verificada de disco:** `0` archivos/directorios filtrados tras completar los 6 pipelines. Consulta el informe completo en [BENCHMARK_PROOF.md](BENCHMARK_PROOF.md).
 

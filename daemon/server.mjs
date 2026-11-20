@@ -448,6 +448,8 @@ export function createKapturaDaemon({
         const width = Number(h["x-kaptura-width"] || url.searchParams.get("width") || 0);
         const height = Number(h["x-kaptura-height"] || url.searchParams.get("height") || 0);
         const denoise = String(h["x-kaptura-denoise"] || url.searchParams.get("denoise") || "").toLowerCase() === "true";
+        const rawSharpen = h["x-kaptura-sharpen"] ?? url.searchParams.get("sharpen");
+        const sharpen = rawSharpen !== undefined && rawSharpen !== "" ? Number(rawSharpen) : null;
         const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
         const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || "");
 
@@ -463,6 +465,7 @@ export function createKapturaDaemon({
           width,
           height,
           denoise,
+          sharpen,
           quality,
           taskId,
           onProgress: emitProgressEvent,

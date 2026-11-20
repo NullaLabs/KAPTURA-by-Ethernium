@@ -53,26 +53,50 @@
       gl_FragColor = wsum > 0.0 ? acc / wsum : texture2D(uTex, vUv);
     }`;
 
-  // Contrast Adaptive Sharpening (CAS 5-tap edge recovery without halos)
+  // Dual-Scale Halo-Free Adaptive Detail Recovery (Coarse De-Blur + Fine CAS + Color Bounds)
   const CAS_FRAG = `
     precision highp float;
     varying vec2 vUv;
     uniform sampler2D uTex;
     uniform vec2 uTexel;
     uniform float uSharp;
-    float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+    uniform float uScale;
     void main() {
       vec4 center = texture2D(uTex, vUv);
       vec3 c = center.rgb;
-      vec3 n = texture2D(uTex, vUv + vec2(0.0, -uTexel.y)).rgb;
-      vec3 s = texture2D(uTex, vUv + vec2(0.0,  uTexel.y)).rgb;
-      vec3 e = texture2D(uTex, vUv + vec2( uTexel.x, 0.0)).rgb;
-      vec3 w = texture2D(uTex, vUv + vec2(-uTexel.x, 0.0)).rgb;
-      float minL = min(luma(c), min(min(luma(n), luma(s)), min(luma(e), luma(w))));
-      float maxL = max(luma(c), max(max(luma(n), luma(s)), max(luma(e), luma(w))));
-      float amp = clamp(min(minL, 1.0 - maxL) / max(maxL, 1e-4), 0.0, 1.0);
-      float weight = -0.16 * uSharp * sqrt(amp);
-      vec3 outCol = clamp((c + (n + s + e + w) * weight) / (1.0 + 4.0 * weight), 0.0, 1.0);
+
+      // 1-px micro-edge ring (fine polish)
+      vec3 n  = texture2D(uTex, vUv + vec2(0.0, -uTexel.y)).rgb;
+      vec3 s  = texture2D(uTex, vUv + vec2(0.0,  uTexel.y)).rgb;
+      vec3 e  = texture2D(uTex, vUv + vec2( uTexel.x, 0.0)).rgb;
+      vec3 w  = texture2D(uTex, vUv + vec2(-uTexel.x, 0.0)).rgb;
+
+      // Scale-matched coarse ring (~0.65x source texel) to reverse upscale blur slope
+      vec2 stepC = uTexel * clamp(uScale * 0.65, 1.0, 2.75);
+      vec3 nC  = texture2D(uTex, vUv + vec2(0.0, -stepC.y)).rgb;
+      vec3 sC  = texture2D(uTex, vUv + vec2(0.0,  stepC.y)).rgb;
+      vec3 eC  = texture2D(uTex, vUv + vec2( stepC.x, 0.0)).rgb;
+      vec3 wC  = texture2D(uTex, vUv + vec2(-stepC.x, 0.0)).rgb;
+      vec3 nwC = texture2D(uTex, vUv + vec2(-stepC.x, -stepC.y)).rgb;
+      vec3 neC = texture2D(uTex, vUv + vec2( stepC.x, -stepC.y)).rgb;
+      vec3 swC = texture2D(uTex, vUv + vec2(-stepC.x,  stepC.y)).rgb;
+      vec3 seC = texture2D(uTex, vUv + vec2( stepC.x,  stepC.y)).rgb;
+
+      vec3 avgFine = 0.25 * (n + s + e + w);
+      vec3 avgCoarse = 0.125 * (nC + sC + eC + wC + nwC + neC + swC + seC);
+      vec3 diffC = c - avgCoarse;
+      vec3 diffF = c - avgFine;
+
+      // Preserve response on dark scenes; suppress uniform flat-noise amplification
+      float edgeMag = dot(abs(diffC) + abs(diffF), vec3(0.333333));
+      float activity = smoothstep(0.008, 0.14, edgeMag);
+      vec3 sharpened = c + (diffC * 0.85 + diffF * 0.45) * uSharp * activity;
+
+      // Anti-halo color envelope clamp across fine & cardinal coarse neighbors
+      vec3 minCol = min(c, min(min(min(n, s), min(e, w)), min(min(nC, sC), min(eC, wC))));
+      vec3 maxCol = max(c, max(max(max(n, s), max(e, w)), max(max(nC, sC), max(eC, wC))));
+      float overshoot = 0.08 * min(uSharp, 1.25);
+      vec3 outCol = clamp(sharpened, max(vec3(0.0), minCol - overshoot), min(vec3(1.0), maxCol + overshoot));
       gl_FragColor = vec4(outCol, center.a);
     }`;
 
@@ -151,6 +175,7 @@
       tex: gl.getUniformLocation(casProgram, 'uTex'),
       texel: gl.getUniformLocation(casProgram, 'uTexel'),
       sharp: gl.getUniformLocation(casProgram, 'uSharp'),
+      scale: gl.getUniformLocation(casProgram, 'uScale'),
     };
     const aPos = gl.getAttribLocation(program, 'aPos');
     const aCasPos = gl.getAttribLocation(casProgram, 'aPos');
@@ -178,7 +203,7 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
-    function drawCasPass(inputTex, w, h, sharpAmt) {
+    function drawCasPass(inputTex, w, h, sharpAmt, scaleFactor) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, w, h);
       gl.useProgram(casProgram);
@@ -190,15 +215,17 @@
       gl.uniform1i(casUni.tex, 0);
       gl.uniform2f(casUni.texel, 1 / Math.max(1, w), 1 / Math.max(1, h));
       gl.uniform1f(casUni.sharp, sharpAmt);
+      gl.uniform1f(casUni.scale, Math.max(1, Number(scaleFactor) || 1));
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     /**
      * Resize `source` (video / canvas / ImageBitmap) to dw x dh on the GPU.
-     * Optional `opts.sharpen` (0..1) runs a Contrast Adaptive Sharpening recovery pass.
+     * Optional `opts.sharpen` (0..1.5) runs a dual-scale detail recovery pass.
      */
     function resize(source, sw, sh, dw, dh, opts) {
-      const sharp = opts && Number(opts.sharpen) > 0 ? Math.min(1, Number(opts.sharpen)) : 0;
+      const sharp = opts && Number(opts.sharpen) > 0 ? Math.min(1.5, Number(opts.sharpen)) : 0;
+      const scaleFactor = Math.max(dw / Math.max(1, sw), dh / Math.max(1, sh));
       out.width = dw; out.height = dh;
       gl.bindTexture(gl.TEXTURE_2D, srcTex);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -210,7 +237,7 @@
       drawPass(srcTex, midTex, dw, sh, sw, fx, [1, 0]);
       if (sharp > 0) {
         drawPass(midTex, postTex, dw, dh, sh, fy, [0, 1]);
-        drawCasPass(postTex, dw, dh, sharp);
+        drawCasPass(postTex, dw, dh, sharp, scaleFactor);
       } else {
         drawPass(midTex, null, dw, dh, sh, fy, [0, 1]);
       }

@@ -900,17 +900,24 @@
     });
   }
 
+  let userPickedUpscaleProfile = false;
+
   function updateUpskaletorReadiness(dh) {
     const bar = $('upskaletorReadinessBar');
-    if (!bar) return;
-    const h = dh || (window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {});
-    const items = [
-      { label: 'WebGL Lanczos+CAS', on: Boolean(caps && caps.gpu && caps.gpu.webgl) },
-      { label: h && h.hardwareAccelerated ? `GPU Daemon :3370 (${h.preferredCodec})` : 'GPU Daemon :3370', on: Boolean(h && h.online && h.ffmpegAvailable) },
-      { label: 'Real-ESRGAN Vulkan', on: Boolean(h && h.neuralAvailable) },
-      { label: 'RIFE v4.6 2×FPS', on: Boolean(h && h.rifeAvailable) },
-    ];
-    bar.innerHTML = items.map((i) => `<span class="readiness-pill ${i.on ? 'on' : 'off'}">${i.on ? '●' : '○'} ${i.label}</span>`).join('');
+    if (bar) {
+      const h = dh || (window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {});
+      const items = [
+        { label: 'WebGL Lanczos+CAS', on: Boolean(caps && caps.gpu && caps.gpu.webgl) },
+        { label: h && h.hardwareAccelerated ? `GPU Daemon :3370 (${h.preferredCodec})` : 'GPU Daemon :3370', on: Boolean(h && h.online && h.ffmpegAvailable) },
+        { label: 'Real-ESRGAN Vulkan', on: Boolean(h && h.neuralAvailable) },
+        { label: 'RIFE v4.6 2×FPS', on: Boolean(h && h.rifeAvailable) },
+      ];
+      bar.innerHTML = items.map((i) => `<span class="readiness-pill ${i.on ? 'on' : 'off'}">${i.on ? '●' : '○'} ${i.label}</span>`).join('');
+    }
+    const sel = $('upskaletorProfileSelect');
+    if (sel && dh && dh.online && dh.neuralAvailable && !userPickedUpscaleProfile && sel.value === '2k_cas') {
+      sel.value = '4k_ai';
+    }
   }
 
   function updateUpskaletorProfileHint() {
@@ -1002,7 +1009,10 @@
   updateUpskaletorReadiness(null);
   updateUpskaletorProfileHint();
   if ($('upskaletorProfileSelect')) {
-    $('upskaletorProfileSelect').addEventListener('change', updateUpskaletorProfileHint);
+    $('upskaletorProfileSelect').addEventListener('change', (e) => {
+      if (e && e.isTrusted) userPickedUpscaleProfile = true;
+      updateUpskaletorProfileHint();
+    });
   }
 
   if ($('btnForensicDemo')) {
@@ -1012,12 +1022,16 @@
       try {
         const sampleFile = await synthesizeForensicSampleFile();
         upFile = sampleFile;
+        const neuralLive = Boolean(window.KapturaDaemon && typeof window.KapturaDaemon.isNeuralAvailable === 'function' && window.KapturaDaemon.isNeuralAvailable());
+        const demoProfile = neuralLive ? '4k_ai' : '4k_cas';
         $('upskaletorDzTitle').textContent = `DEMO FORENSE: ${sampleFile.name}`;
-        $('upskaletorDzSub').textContent = '480×270 PNG patrón de alta frecuencia · Escalando a 3840×2160 (4K CAS)…';
+        $('upskaletorDzSub').textContent = neuralLive
+          ? '480×270 PNG patrón de alta frecuencia · Reconstruyendo a 3840×2160 (Real-ESRGAN x4plus Vulkan)…'
+          : '480×270 PNG patrón de alta frecuencia · Escalando a 3840×2160 (4K Multi-Scale WebGL)…';
         const upTabBtn = document.querySelector('.tab-btn[data-tab="tab-upskaletor"]');
         if (upTabBtn) upTabBtn.click();
         if ($('upskaletorProfileSelect')) {
-          $('upskaletorProfileSelect').value = '4k_cas';
+          $('upskaletorProfileSelect').value = demoProfile;
           $('upskaletorProfileSelect').dispatchEvent(new Event('change', { bubbles: true }));
         }
         skipNextAutoDownload = true;
@@ -1085,8 +1099,11 @@
         ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
         : await ensureRealFile(activeSrc);
 
+      const detailSelect = $('upskaletorDetailSelect');
+      const sharpenVal = detailSelect ? Number(detailSelect.value) : undefined;
       const result = await window.KapturaUpskaletor.run(fileObj, profile, engine, {
         caps,
+        sharpen: sharpenVal,
         taskId: activeUpscaleTaskId,
         signal: activeUpscaleCtrl ? activeUpscaleCtrl.signal : undefined,
         onProgress: (p, m) => {

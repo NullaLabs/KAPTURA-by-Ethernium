@@ -1,6 +1,6 @@
 # KAPTURA / UPSKALETOR — Empirical Ground-Truth Benchmark Proof
 
-- **Date (UTC):** 2026-11-19T14:29:10.885Z
+- **Date (UTC):** 2026-11-20T00:32:07.205Z
 - **Hardware:** NVIDIA GeForce RTX 3070 Laptop GPU, 595.97, 8192 MiB
 - **FFmpeg Codec:** `h264_nvenc` (HW Accelerated: `true`)
 - **FFmpeg Filters Probed:** CAS=`true`, SSIM=`true`, PSNR=`true`, VMAF=`true`
@@ -13,12 +13,12 @@
 
 | Engine / Pipeline | Output Stream | SSIM ↑ | PSNR (dB) ↑ | VMAF ↑ | FPS Drift ↓ | Duration Drift | Audio AAC | GPU Time |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.44s |
-| Motor 1: Lanczos-3 + CAS (h264_nvenc) | `1280x720 @ 30fps` | 0.5869 | 21.21 | 56.91 | 0% | 0 ms | PRESERVED | 0.81s |
-| Motor 2: Real-ESRGAN x4plus (Vulkan) | `1280x720 @ 30fps` | 0.7290 | 20.83 | 35.41 | 0% | 10 ms | PRESERVED | 62.68s |
-| Motor 2 Fast: Real-ESRGAN v3 (Vulkan) | `1280x720 @ 30fps` | 0.6165 | 19.81 | 22.70 | 0% | 10 ms | PRESERVED | 6.59s |
-| Motor 3: RIFE v4.6 2× FPS (Vulkan) | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | 0% | 10 ms | PRESERVED | 3.68s |
-| HYBRID ULTRA: Real-ESRGAN v3 + RIFE v4.6 | `1280x720 @ 60fps` | 0.6166 | 19.81 | 22.68 | 0% | 10 ms | PRESERVED | 16.01s |
+| Baseline Bicubic (FFmpeg) | `1280x720 @ 30fps` | 0.5830 | 21.05 | 51.66 | 0% | 0 ms | PRESERVED | 0.34s |
+| Motor 1: Lanczos-3 + CAS (h264_nvenc) | `1280x720 @ 30fps` | 0.5867 | 21.37 | 62.39 | 0% | 0 ms | PRESERVED | 0.64s |
+| Motor 2: Real-ESRGAN x4plus (Vulkan) | `1280x720 @ 30fps` | 0.7356 | 20.75 | 36.66 | 0% | 10 ms | PRESERVED | 18.68s |
+| Motor 2 Fast: Real-ESRGAN v3 (Vulkan) | `1280x720 @ 30fps` | 0.6141 | 19.76 | 23.39 | 0% | 10 ms | PRESERVED | 8.15s |
+| Motor 3: RIFE v4.6 2× FPS (Vulkan) | `320x180 @ 60fps` | 0.5780 | 21.03 | 50.00 | 0% | 10 ms | PRESERVED | 6.09s |
+| HYBRID ULTRA: Real-ESRGAN v3 + RIFE v4.6 | `1280x720 @ 60fps` | 0.6145 | 19.76 | 23.37 | 0% | 10 ms | PRESERVED | 20.52s |
 
 ## Reproduce Locally
 

@@ -449,6 +449,9 @@
     if (opts.width) headers['X-Kaptura-Width'] = String(opts.width);
     if (opts.height) headers['X-Kaptura-Height'] = String(opts.height);
     if (opts.denoise) headers['X-Kaptura-Denoise'] = 'true';
+    if (opts.sharpen !== undefined && opts.sharpen !== null && Number.isFinite(Number(opts.sharpen))) {
+      headers['X-Kaptura-Sharpen'] = String(opts.sharpen);
+    }
 
     if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
     const stopSse = subscribeTaskProgress(taskId, opts.onProgress);

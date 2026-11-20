@@ -21,8 +21,8 @@
   const Scaler = root.KapturaScaler;
 
   const PROFILES = {
-    '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', ai: false, w: 2560, h: 1440, sharpen: 0.65, cfr: true, bitrate: 24 },
-    '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', ai: false, w: 3840, h: 2160, sharpen: 0.72, cfr: true, bitrate: 45 },
+    '2k_cas':         { label: '2K QHD · Lanczos-3 + CAS Detail', ai: false, w: 2560, h: 1440, sharpen: 0.90, cfr: true, bitrate: 24 },
+    '4k_cas':         { label: '4K UHD · Lanczos-3 + CAS Detail', ai: false, w: 3840, h: 2160, sharpen: 0.95, cfr: true, bitrate: 45 },
     '4k_ai':          { label: '4K UHD · Real-ESRGAN x4plus (Neural)', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4 },
     'restore_ai':     { label: 'Restauración Neural · x4plus + Denoise', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesrgan-x4plus', scale: 4, denoise: true },
     'anime_ai':       { label: 'Anime / Video Fast · Real-ESRGAN v3', ai: true, pipeline: 'esrgan', w: 3840, h: 2160, model: 'realesr-animevideov3', scale: 4 },
@@ -30,8 +30,8 @@
     'hybrid_4k_rife': { label: 'HYBRID ULTRA · Real-ESRGAN 4K + RIFE 2× FPS', ai: true, pipeline: 'hybrid', model: 'realesrgan-x4plus', scale: 4, rifeMult: 2, w: 3840, h: 2160 },
     '4k_lanczos':     { label: '4K UHD · Lanczos-3 (in-browser)', ai: false, w: 3840, h: 2160, bitrate: 40 },
     '1080p_lanczos':  { label: '1080p · Lanczos-3 (in-browser)', ai: false, w: 1920, h: 1080, bitrate: 16 },
-    '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 2, sharpen: 0.35 },
-    '4x_super':       { label: '4X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 4, sharpen: 0.45 },
+    '2x_super':       { label: '2X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 2, sharpen: 0.70 },
+    '4x_super':       { label: '4X Super-Resolution (Lanczos-3 + CAS)', ai: false, scale: 4, sharpen: 0.85 },
     'twitter_4k':     { label: 'Twitter/X · 4K',              ai: false, w: 3840, h: 2160, bitrate: 25 },
     'twitter_1080p':  { label: 'Twitter/X · 1080p',           ai: false, w: 1920, h: 1080, bitrate: 15 },
     'youtube_4k':     { label: 'YouTube · 4K Master',         ai: false, w: 3840, h: 2160, bitrate: 45 },
@@ -84,6 +84,8 @@
     const profile = PROFILES[profileKey] || PROFILES['4k_lanczos'];
     const fileName = (file && file.name) || 'kaptura_master.mp4';
     const isImg = isImageFile(file);
+    const hasSharpenOpt = opts.sharpen !== undefined && opts.sharpen !== null && !Number.isNaN(Number(opts.sharpen));
+    const resolvedSharpen = hasSharpenOpt ? Math.max(0, Number(opts.sharpen)) : (profile.sharpen || 0);
 
     if (profile.ai) {
       const pipe = profile.pipeline || 'esrgan';
@@ -104,6 +106,7 @@
             width: profile.w || 0,
             height: profile.h || 0,
             denoise: Boolean(profile.denoise),
+            sharpen: hasSharpenOpt ? resolvedSharpen : undefined,
             quality: 'high',
             taskId: opts.taskId,
             signal: opts.signal,
@@ -158,7 +161,7 @@
       }
       dw = dw & ~1; dh = dh & ~1;
 
-      const scaler = Scaler.create({ quality: 'max', caps: opts.caps, sharpen: profile.sharpen || 0 });
+      const scaler = Scaler.create({ quality: 'max', caps: opts.caps, sharpen: resolvedSharpen });
       const scaledCanvas = scaler.toCanvas(img, sw, sh, dw, dh);
 
       if (opts.onProgress) opts.onProgress(0.9);
@@ -192,7 +195,7 @@
           bitrateMbps: profile.bitrate || 25,
           fps: opts.fps || 30,
           quality: 'max',
-          sharpen: profile.sharpen || 0,
+          sharpen: resolvedSharpen,
           cfr: Boolean(profile.cfr),
           taskId: opts.taskId,
           signal: opts.signal,
@@ -211,7 +214,7 @@
         bitrateMbps: profile.bitrate || 25,
         fps: opts.fps || 30,
         quality: 'max',
-        sharpen: profile.sharpen || 0,
+        sharpen: resolvedSharpen,
         cfr: Boolean(profile.cfr),
         caps: opts.caps,
         onProgress: opts.onProgress,

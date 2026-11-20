@@ -375,7 +375,9 @@
 
         if (!state.autoZoomApplied) {
           state.autoZoomApplied = true;
-          if (dA.w > dB.w) {
+          if (dA.w >= 2560 && dA.w / Math.max(1, dB.w) >= 2.5) {
+            setZoom(4);
+          } else if (dA.w > dB.w) {
             setZoom(2);
           } else if (dB.w >= dA.w && !isRife) {
             noticeBanner.style.display = 'block';

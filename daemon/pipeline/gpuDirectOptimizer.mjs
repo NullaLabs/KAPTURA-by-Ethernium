@@ -136,27 +136,28 @@ export function detectVideoBackend(forceRefresh = false) {
 /** Build deterministic FFmpeg encoder flags for container & bitrate targets. */
 export function getOptimalGpuEncoderParams({ container = "mp4", bitrateMbps = 0, quality = "high" } = {}) {
   const backend = detectVideoBackend();
+  const isMaster = quality === "master" || quality === "max";
   const targetKbps = bitrateMbps > 0 ? Math.max(150, Math.round(bitrateMbps * 1000)) : 0;
 
   if (container === "webm" && backend.encoders.vp9) {
     const flags = ["-c:v", "libvpx-vp9", "-row-mt", "1", "-deadline", quality === "fast" ? "realtime" : "good"];
     if (targetKbps > 0) flags.push("-b:v", `${targetKbps}k`, "-maxrate", `${Math.round(targetKbps * 1.25)}k`, "-bufsize", `${targetKbps * 2}k`);
-    else flags.push("-crf", quality === "master" ? "18" : "26", "-b:v", "0");
+    else flags.push("-crf", isMaster ? "18" : "26", "-b:v", "0");
     return { codec: "libvpx-vp9", gpuFlags: flags, hardwareAccelerated: false, backend };
   }
 
   if (backend.encoders.nvencH264) {
-    const preset = quality === "master" ? "p5" : quality === "fast" ? "p1" : "p3";
+    const preset = isMaster ? "p5" : quality === "fast" ? "p1" : "p3";
     const flags = ["-c:v", "h264_nvenc", "-preset", preset, "-tune", "hq", "-pix_fmt", "yuv420p"];
     if (targetKbps > 0) {
       flags.push("-rc", "vbr", "-b:v", `${targetKbps}k`, "-maxrate", `${Math.round(targetKbps * 1.2)}k`, "-bufsize", `${targetKbps * 2}k`);
     } else {
-      flags.push("-rc", "vbr", "-cq", quality === "master" ? "18" : "23", "-b:v", "0");
+      flags.push("-rc", "vbr", "-cq", isMaster ? "18" : "23", "-b:v", "0");
     }
     return { codec: "h264_nvenc", gpuFlags: flags, hardwareAccelerated: true, backend };
   }
 
-  const crf = quality === "master" ? "16" : quality === "fast" ? "26" : "20";
+  const crf = isMaster ? "16" : quality === "fast" ? "26" : "20";
   const flags = ["-c:v", "libx264", "-preset", quality === "fast" ? "veryfast" : "medium", "-pix_fmt", "yuv420p"];
   if (targetKbps > 0) flags.push("-b:v", `${targetKbps}k`, "-maxrate", `${Math.round(targetKbps * 1.2)}k`, "-bufsize", `${targetKbps * 2}k`);
   else flags.push("-crf", crf);
