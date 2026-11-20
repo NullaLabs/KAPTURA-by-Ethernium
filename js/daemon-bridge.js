@@ -175,11 +175,29 @@
         opts.onProgress(frac, data);
       };
 
+      let consecutive404 = 0;
+      let consecutiveNetErr = 0;
+
       const checkJobStatus = async () => {
         if (settled) return;
         try {
           const r = await fetch(`${DAEMON_BASE}/jobs/${encodeURIComponent(taskId)}`, { cache: 'no-store' });
-          if (!r.ok) return;
+          if (r.status === 404) {
+            consecutive404++;
+            if (consecutive404 >= 2) {
+              finishErr(new Error('El trabajo en :3370 fue interrumpido (el daemon se reinició o el ID expiró). Vuelve a iniciar el proceso.'));
+            }
+            return;
+          }
+          if (!r.ok) {
+            consecutiveNetErr++;
+            if (consecutiveNetErr >= 4) {
+              finishErr(new Error(`Error HTTP ${r.status} consultando el trabajo en :3370.`));
+            }
+            return;
+          }
+          consecutive404 = 0;
+          consecutiveNetErr = 0;
           const job = await r.json();
           if (!job || settled) return;
           if (job.status === 'completed') {
@@ -194,7 +212,12 @@
           } else {
             emitJobProgress(job);
           }
-        } catch { /* transient poll glitch; retry next tick */ }
+        } catch {
+          consecutiveNetErr++;
+          if (consecutiveNetErr >= 5) {
+            finishErr(new Error('Conexión perdida con el daemon :3370 durante el procesamiento.'));
+          }
+        }
       };
 
       stopSse = subscribeTaskProgress(taskId, (frac, evt) => {
@@ -262,7 +285,9 @@
 
       if (useAsync) {
         const accepted = await res.json();
-        const job = await waitForAsyncJob((accepted && accepted.taskId) || taskId, opts);
+        const activeTaskId = (accepted && accepted.taskId) || taskId;
+        if (typeof opts.onProgress === 'function') opts.onProgress(0.06, { taskId: activeTaskId, stage: 'QUEUED' });
+        const job = await waitForAsyncJob(activeTaskId, opts);
         const remoteUrl = job.downloadUrl ? `${DAEMON_BASE}${job.downloadUrl}` : '';
         let outBlob = null;
         if (!keepOnDisk && remoteUrl) {
@@ -595,7 +620,9 @@
 
       if (useAsync) {
         const accepted = await res.json();
-        const job = await waitForAsyncJob((accepted && accepted.taskId) || taskId, opts);
+        const activeTaskId = (accepted && accepted.taskId) || taskId;
+        if (typeof opts.onProgress === 'function') opts.onProgress(0.06, { taskId: activeTaskId, stage: 'QUEUED' });
+        const job = await waitForAsyncJob(activeTaskId, opts);
         const remoteUrl = job.downloadUrl ? `${DAEMON_BASE}${job.downloadUrl}` : '';
         let outBlob = null;
         if (!keepOnDisk && remoteUrl) {
@@ -606,9 +633,12 @@
         const ext = isImg ? 'png' : 'mp4';
         const modelUsed = job.model || opts.model || 'realesrgan-x4plus';
         const pipeUsed = job.pipeline || pipeline;
-        const modeTag = pipeUsed === 'rife'
-          ? `RIFE v4.6 (${opts.rifeMult || 2}× FPS)`
-          : (pipeUsed === 'hybrid' ? `Real-ESRGAN (${modelUsed}) + RIFE v4.6` : `Real-ESRGAN (${modelUsed})`);
+        const isNativeCas = Boolean(job.sourceAlreadyTarget || String(modelUsed).startsWith('gpu-native-cas'));
+        const modeTag = isNativeCas
+          ? 'GPU CAS Native (4K source preserved)'
+          : (pipeUsed === 'rife'
+            ? `RIFE v4.6 (${opts.rifeMult || 2}× FPS)`
+            : (pipeUsed === 'hybrid' ? `Real-ESRGAN (${modelUsed}) + RIFE v4.6` : `Real-ESRGAN (${modelUsed})`));
         return {
           blob: outBlob,
           remoteUrl: keepOnDisk ? remoteUrl : '',
@@ -623,7 +653,7 @@
           model: modelUsed,
           scaleMode: modeTag,
           integrity: job.integrity || null,
-          neural: true,
+          neural: !isNativeCas && job.neural !== false,
           fellBack: false,
           viaDaemon: true,
         };

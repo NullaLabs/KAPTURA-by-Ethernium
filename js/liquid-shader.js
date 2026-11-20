@@ -29,7 +29,9 @@
       'precision mediump float;',
       'uniform vec2 u_res;',
       'uniform float u_time;',
+      'uniform float u_rawTime;',
       'uniform vec2 u_mouse;',
+      'uniform vec4 u_ripples[4];',
       '',
       'float hash(vec2 p) {',
       '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);',
@@ -59,15 +61,40 @@
       '}',
       '',
       'void main() {',
-      '  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res.xy) / min(u_res.x, u_res.y);',
+      '  float minRes = min(u_res.x, u_res.y);',
+      '  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res.xy) / minRes;',
       '  vec2 m = (u_mouse - 0.5) * 0.45;',
       '  float t = u_time * 0.16;',
       '',
-      '  vec2 q = vec2(fbm(uv * 1.45 + vec2(t * 0.6, -t * 0.4) + m * 0.35),',
-      '                fbm(uv * 1.45 + vec2(-t * 0.5, t * 0.5)));',
-      '  vec2 r = vec2(fbm(uv * 1.85 + 2.2 * q + vec2(1.7, 9.2) + t * 0.35),',
-      '                fbm(uv * 1.85 + 2.2 * q + vec2(8.3, 2.8) - t * 0.28));',
-      '  float f = fbm(uv * 1.55 + 1.9 * r + m * 0.2);',
+      '  vec2 rippleOffset = vec2(0.0);',
+      '  float rippleCrest = 0.0;',
+      '  for (int i = 0; i < 4; i++) {',
+      '    vec4 rp = u_ripples[i];',
+      '    float age = u_rawTime - rp.z;',
+      '    if (rp.w > 0.01 && age >= 0.0 && age < 2.2) {',
+      '      vec2 rPos = (rp.xy * u_res.xy - 0.5 * u_res.xy) / minRes;',
+      '      vec2 diff = uv - rPos;',
+      '      float d = length(diff);',
+      '      vec2 dir = d > 0.0001 ? diff / d : vec2(0.0);',
+      '      float radius = age * 0.72;',
+      '      float packet = exp(-pow((d - radius) * 9.5, 2.0));',
+      '      float train = sin((d - radius) * 42.0) * exp(-abs(d - radius) * 14.0);',
+      '      float decay = exp(-age * 1.55) * rp.w;',
+      '      rippleOffset += dir * train * decay * 0.048;',
+      '      rippleCrest += max(0.0, train) * packet * decay;',
+      '      float echoRadius = max(0.0, age - 0.14) * 0.50;',
+      '      float echoRing = exp(-pow((d - echoRadius) * 14.0, 2.0)) * decay * 0.65;',
+      '      float splashCore = exp(-d * d * 95.0) * exp(-age * 9.0) * rp.w;',
+      '      rippleCrest += echoRing + splashCore * 1.15;',
+      '    }',
+      '  }',
+      '',
+      '  vec2 sampleUv = uv + rippleOffset;',
+      '  vec2 q = vec2(fbm(sampleUv * 1.45 + vec2(t * 0.6, -t * 0.4) + m * 0.35),',
+      '                fbm(sampleUv * 1.45 + vec2(-t * 0.5, t * 0.5)));',
+      '  vec2 r = vec2(fbm(sampleUv * 1.85 + 2.2 * q + vec2(1.7, 9.2) + t * 0.35),',
+      '                fbm(sampleUv * 1.85 + 2.2 * q + vec2(8.3, 2.8) - t * 0.28));',
+      '  float f = fbm(sampleUv * 1.55 + 1.9 * r + m * 0.2);',
       '',
       '  // Deep Obsidian base gradient + liquid satin veins',
       '  vec3 obsidian = vec3(0.008, 0.011, 0.020);',
@@ -83,6 +110,8 @@
       '  col += cyanVein * caustic * 0.22;',
       '  col += emeraldVein * smoothstep(0.58, 0.92, q.y) * 0.14;',
       '  col += violetVein * sheen * 0.18;',
+      '  col += vec3(0.18, 0.92, 1.0) * rippleCrest * 0.42;',
+      '  col += vec3(0.0, 0.95, 0.65) * rippleCrest * 0.16;',
       '',
       '  // Mouse specular crystal glow + subtle vignette',
       '  float md = length(uv - m * 1.8);',
@@ -122,7 +151,22 @@
     const aPos = gl.getAttribLocation(prog, 'a_pos');
     const uRes = gl.getUniformLocation(prog, 'u_res');
     const uTime = gl.getUniformLocation(prog, 'u_time');
+    const uRawTime = gl.getUniformLocation(prog, 'u_rawTime');
     const uMouse = gl.getUniformLocation(prog, 'u_mouse');
+    const uRipples = [
+      gl.getUniformLocation(prog, 'u_ripples[0]'),
+      gl.getUniformLocation(prog, 'u_ripples[1]'),
+      gl.getUniformLocation(prog, 'u_ripples[2]'),
+      gl.getUniformLocation(prog, 'u_ripples[3]'),
+    ];
+
+    const bgRipples = [
+      { x: -10, y: -10, t: -99, amp: 0 },
+      { x: -10, y: -10, t: -99, amp: 0 },
+      { x: -10, y: -10, t: -99, amp: 0 },
+      { x: -10, y: -10, t: -99, amp: 0 },
+    ];
+    let bgRippleCursor = 0;
 
     let mouseX = 0.5;
     let mouseY = 0.35;
@@ -131,6 +175,23 @@
     let rafId = 0;
     const startTs = performance.now();
     const reduceMotion = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function pushBgRipple(clientX, clientY, strength) {
+      const w = Math.max(1, root.innerWidth || 1280);
+      const h = Math.max(1, root.innerHeight || 720);
+      const nx = Number.isFinite(clientX) ? Math.max(0, Math.min(1, clientX / w)) : 0.5;
+      const ny = Number.isFinite(clientY) ? Math.max(0, Math.min(1, 1.0 - clientY / h)) : 0.5;
+      bgRipples[bgRippleCursor] = {
+        x: nx,
+        y: ny,
+        t: -1,
+        amp: Math.max(0.15, Math.min(1.4, Number(strength) || 1.0)),
+      };
+      bgRippleCursor = (bgRippleCursor + 1) % 4;
+      if (!rafId && !document.hidden) {
+        rafId = requestAnimationFrame(drawFrame);
+      }
+    }
 
     function resize() {
       const dpr = Math.min(1.5, root.devicePixelRatio || 1);
@@ -162,13 +223,25 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.enableVertexAttribArray(aPos);
       gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      const rawSec = (now - startTs) * 0.001;
       gl.uniform2f(uRes, canvas.width, canvas.height);
-      gl.uniform1f(uTime, reduceMotion ? 0.5 : (now - startTs) * 0.001);
+      gl.uniform1f(uTime, reduceMotion ? 0.5 : rawSec);
+      if (uRawTime) gl.uniform1f(uRawTime, rawSec);
       gl.uniform2f(uMouse, mouseX, mouseY);
+      for (let i = 0; i < 4; i++) {
+        const rp = bgRipples[i];
+        if (rp.amp > 0.01 && rp.t < 0) rp.t = rawSec;
+        if (uRipples[i]) {
+          gl.uniform4f(uRipples[i], rp.x, rp.y, rp.t, rp.amp);
+        }
+      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      if (!reduceMotion) {
+      const hasLiveRipple = bgRipples.some((rp) => rp.amp > 0.01 && (rp.t < 0 || (rawSec - rp.t) < 2.2));
+      if (!reduceMotion || hasLiveRipple) {
         rafId = requestAnimationFrame(drawFrame);
+      } else {
+        rafId = 0;
       }
     }
 
@@ -179,7 +252,201 @@
     });
 
     rafId = requestAnimationFrame(drawFrame);
-    return { stop: () => { if (rafId) cancelAnimationFrame(rafId); } };
+    return {
+      pushRipple: pushBgRipple,
+      stop: () => { if (rafId) cancelAnimationFrame(rafId); },
+    };
+  }
+
+  let bgShaderHandle = null;
+  const zoneWaterState = typeof WeakMap === 'function' ? new WeakMap() : null;
+  let lastHoverTouchAt = 0;
+
+  function spawnZoneWaterRipple(zoneEl, clientX, clientY, strength) {
+    if (!zoneEl || typeof document === 'undefined') return;
+    const rect = zoneEl.getBoundingClientRect();
+    if (!rect || rect.width < 12 || rect.height < 12) return;
+
+    const lx = Number.isFinite(clientX) ? Math.max(0, Math.min(rect.width, clientX - rect.left)) : rect.width * 0.5;
+    const ly = Number.isFinite(clientY) ? Math.max(0, Math.min(rect.height, clientY - rect.top)) : rect.height * 0.5;
+    const maxR = Math.hypot(Math.max(lx, rect.width - lx), Math.max(ly, rect.height - ly)) * 1.15;
+    const durMs = strength >= 0.7 ? 1750 : 820;
+
+    if (strength >= 0.7) {
+      zoneEl.classList.remove('dz-absorbing');
+      void zoneEl.offsetWidth;
+      zoneEl.classList.add('dz-absorbing');
+      clearTimeout(zoneEl._dzAbsorbTimer);
+      zoneEl._dzAbsorbTimer = setTimeout(() => zoneEl.classList.remove('dz-absorbing'), 680);
+    }
+
+    let st = zoneWaterState ? zoneWaterState.get(zoneEl) : zoneEl._waterState;
+    if (!st) {
+      const cvs = document.createElement('canvas');
+      cvs.className = 'dz-water-canvas';
+      zoneEl.appendChild(cvs);
+      st = { canvas: cvs, drops: [], rafId: 0 };
+      if (zoneWaterState) zoneWaterState.set(zoneEl, st);
+      else zoneEl._waterState = st;
+    }
+
+    const droplets = [];
+    if (strength >= 0.7) {
+      for (let k = 0; k < 12; k++) {
+        const ang = (Math.PI * 2 * k) / 12 + (Math.random() - 0.5) * 0.32;
+        droplets.push({
+          ang,
+          dist: 18 + Math.random() * 30,
+          size: 1.6 + Math.random() * 2.1,
+        });
+      }
+    }
+
+    st.drops.push({
+      x: lx,
+      y: ly,
+      t0: null,
+      strength: Math.max(0.2, Math.min(1.2, Number(strength) || 1.0)),
+      maxR,
+      durMs,
+      droplets,
+    });
+    if (st.drops.length > 6) st.drops.shift();
+
+    const drawStep = (now) => {
+      const rNow = zoneEl.getBoundingClientRect();
+      const cssW = Math.max(10, Math.round(rNow.width || rect.width));
+      const cssH = Math.max(10, Math.round(rNow.height || rect.height));
+      const dpr = Math.min(2, root.devicePixelRatio || 1);
+      const pxW = Math.round(cssW * dpr);
+      const pxH = Math.round(cssH * dpr);
+      if (st.canvas.width !== pxW || st.canvas.height !== pxH) {
+        st.canvas.width = pxW;
+        st.canvas.height = pxH;
+      }
+      const ctx = st.canvas.getContext('2d');
+      if (!ctx) { st.rafId = 0; return; }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      const alive = [];
+      for (let i = 0; i < st.drops.length; i++) {
+        const d = st.drops[i];
+        if (d.t0 === null) d.t0 = now;
+        const elapsed = Math.max(0, now - d.t0);
+        if (elapsed >= d.durMs) continue;
+        alive.push(d);
+
+        // 1. Stone entry absorption dimple + cyan plunge flash (0..320ms)
+        if (elapsed < 320 && d.strength >= 0.7) {
+          const coreP = elapsed / 320;
+          const coreAlpha = (1 - coreP) * 0.65 * d.strength;
+          const coreR = 8 + (1 - coreP) * 28;
+          const grad = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, coreR);
+          grad.addColorStop(0, `rgba(2, 10, 22, ${(coreAlpha * 0.85).toFixed(3)})`);
+          grad.addColorStop(0.35, `rgba(220, 255, 255, ${coreAlpha.toFixed(3)})`);
+          grad.addColorStop(0.65, `rgba(0, 240, 255, ${(coreAlpha * 0.72).toFixed(3)})`);
+          grad.addColorStop(1, 'rgba(0, 255, 157, 0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, coreR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 2. Crown micro-droplets radiating on plunge (0..500ms)
+        if (elapsed < 500 && d.droplets.length) {
+          const dp = elapsed / 500;
+          const dEase = 1 - Math.pow(1 - dp, 2.4);
+          const dAlpha = (1 - dp) * 0.9 * d.strength;
+          ctx.fillStyle = `rgba(195, 253, 255, ${dAlpha.toFixed(3)})`;
+          for (let k = 0; k < d.droplets.length; k++) {
+            const p = d.droplets[k];
+            const rx = d.x + Math.cos(p.ang) * p.dist * dEase;
+            const ry = d.y + Math.sin(p.ang) * p.dist * dEase - Math.sin(dp * Math.PI) * 7;
+            ctx.beginPath();
+            ctx.arc(rx, ry, p.size * (1 - dp * 0.45), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // 3. Concentric capillary-gravity water ripples
+        const ringCount = d.strength >= 0.7 ? 5 : 2;
+        for (let k = 0; k < ringCount; k++) {
+          const ringAge = elapsed - k * 85;
+          if (ringAge < 0) continue;
+          const ringSpan = d.durMs - k * 85;
+          if (ringAge >= ringSpan || ringSpan <= 0) continue;
+          const p = ringAge / ringSpan;
+          const easeOut = Math.pow(p, 0.76);
+          const r = 6 + d.maxR * easeOut;
+          const env = Math.pow(1 - p, 1.3) * d.strength * (k === 0 ? 0.92 : Math.max(0.28, 0.74 - k * 0.1));
+          if (env <= 0.01) continue;
+
+          // Refraction dark trough ahead/inside the water crest
+          ctx.strokeStyle = `rgba(2, 10, 24, ${(env * 0.62).toFixed(3)})`;
+          ctx.lineWidth = Math.max(1.8, (6.0 - k * 0.75) * (1 - p * 0.4));
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, Math.max(2, r - 2.5), 0, Math.PI * 2);
+          ctx.stroke();
+
+          // Luminous cyan/emerald/violet water crest
+          ctx.save();
+          if (k === 0) {
+            ctx.shadowColor = 'rgba(0, 240, 255, 0.55)';
+            ctx.shadowBlur = 8;
+          }
+          ctx.strokeStyle = k === 0
+            ? `rgba(140, 250, 255, ${env.toFixed(3)})`
+            : (k === 1
+              ? `rgba(0, 240, 255, ${(env * 0.92).toFixed(3)})`
+              : (k === 2
+                ? `rgba(0, 255, 157, ${(env * 0.88).toFixed(3)})`
+                : `rgba(168, 85, 247, ${(env * 0.78).toFixed(3)})`));
+          ctx.lineWidth = Math.max(1.2, (4.2 - k * 0.55) * (1 - p * 0.55));
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+
+          // Crisp outer specular meniscus highlight on primary crest
+          if (k === 0 && p < 0.78) {
+            ctx.strokeStyle = `rgba(245, 255, 255, ${(env * 0.65).toFixed(3)})`;
+            ctx.lineWidth = 1.25;
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, Math.max(2, r + 1.6), 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+      }
+
+      st.drops = alive;
+      if (alive.length > 0 && !document.hidden) {
+        st.rafId = requestAnimationFrame(drawStep);
+      } else {
+        st.rafId = 0;
+        ctx.clearRect(0, 0, cssW, cssH);
+      }
+    };
+
+    if (!st.rafId) {
+      st.rafId = requestAnimationFrame(drawStep);
+    }
+  }
+
+  function triggerWaterDrop(clientX, clientY, strength = 1.0, zoneEl = null) {
+    if (bgShaderHandle && typeof bgShaderHandle.pushRipple === 'function') {
+      bgShaderHandle.pushRipple(clientX, clientY, strength);
+    }
+    if (zoneEl) {
+      spawnZoneWaterRipple(zoneEl, clientX, clientY, strength);
+    }
+  }
+
+  function triggerHoverTouch(clientX, clientY, zoneEl = null) {
+    const now = performance.now();
+    if (now - lastHoverTouchAt < 180) return;
+    lastHoverTouchAt = now;
+    triggerWaterDrop(clientX, clientY, 0.28, zoneEl);
   }
 
   function initInteractive3DBevels() {
@@ -267,7 +534,7 @@
 
   if (typeof document !== 'undefined') {
     const boot = () => {
-      initBackgroundShader();
+      bgShaderHandle = initBackgroundShader();
       initInteractive3DBevels();
       initStageChamferBevel();
     };
@@ -275,7 +542,13 @@
     else boot();
   }
 
-  const api = { initBackgroundShader, initInteractive3DBevels, initStageChamferBevel };
+  const api = {
+    initBackgroundShader,
+    initInteractive3DBevels,
+    initStageChamferBevel,
+    triggerWaterDrop,
+    triggerHoverTouch,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaLiquidShader = api;
 })(typeof self !== 'undefined' ? self : this);

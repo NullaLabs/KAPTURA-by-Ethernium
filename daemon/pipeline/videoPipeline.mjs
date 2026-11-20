@@ -1135,6 +1135,70 @@ export async function upscaleAiTask({
     const expectedFpsRatio = needsRife ? safeMult : 1;
     const targetFps = Math.round(sourceFps * expectedFpsRatio * 1000) / 1000;
 
+    if (mode === "esrgan" && width > 0 && srcMeta.width >= width) {
+      const outW = evenDim(srcMeta.width);
+      const outH = evenDim(srcMeta.height);
+      const vf = [];
+      if (denoise) vf.push("hqdn3d=1.1:1.1:3.5:3.5");
+      if (effectiveSharp > 0) {
+        const lumaAmt = Math.min(1.55, Math.max(0.30, effectiveSharp * 1.15)).toFixed(2);
+        vf.push(`unsharp=5:5:${lumaAmt}:5:5:0.0`);
+        if (casPostStrength > 0) vf.push(`cas=strength=${casPostStrength.toFixed(2)}`);
+      }
+      const outputFile = `${taskId}.mp4`;
+      const outputPath = path.join(outputDir, outputFile);
+      const preArgs = ["-hide_banner", "-y", "-i", stagedInput, "-fps_mode", "cfr", "-map", "0:v:0", "-map", "0:a?", "-c:a", "copy"];
+      if (vf.length > 0) preArgs.push("-vf", vf.join(","));
+      if (typeof onProgress === "function") {
+        onProgress({ taskId, stage: "GPU_ENHANCE_4K", model: "gpu-native-cas", scale: 1, progress: 14 });
+      }
+      const encRes = await encodeWithSafeFallback({
+        ffmpegPath: backend.ffmpegPath,
+        preArgs,
+        container: "mp4",
+        bitrateMbps: 42,
+        quality,
+        outputPath,
+        totalDurationSec: srcMeta.duration || probedDur,
+        onProgress: typeof onProgress === "function"
+          ? (ev) => onProgress({ ...ev, stage: "GPU_ENHANCE_4K", model: "gpu-native-cas", scale: 1 })
+          : undefined,
+        taskId,
+      });
+      if (encRes.aborted || isTaskAborted(taskId)) {
+        try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
+      if (!encRes.ok || !fs.existsSync(outputPath)) {
+        return { success: false, status: "encode_failed", error: encRes.error || "Native 4K GPU enhancement failed" };
+      }
+      const stat = fs.statSync(outputPath);
+      const outMeta = await probeMediaMeta(backend.ffmpegPath, outputPath);
+      const elapsedMs = Date.now() - t0;
+      const integrity = buildIntegrityReceipt(srcMeta, outMeta, elapsedMs, 1);
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "COMPLETE", progress: 100 });
+      return {
+        success: true,
+        status: "completed",
+        taskId,
+        pipeline: mode,
+        outputFile,
+        videoPath: outputPath,
+        sizeBytes: stat.size,
+        duration: outMeta.duration || probedDur,
+        width: outMeta.width || outW,
+        height: outMeta.height || outH,
+        fps: outMeta.fps || sourceFps,
+        model: "gpu-native-cas (source already >= target)",
+        sourceAlreadyTarget: true,
+        scale: 1,
+        neural: false,
+        hardwareAccelerated: encRes.hardwareAccelerated,
+        integrity,
+        providers: getCompanionStatus(),
+      };
+    }
+
     const esrganBinDir = realEsrganPath ? path.dirname(realEsrganPath) : "";
     const esrganModelsDir = esrganBinDir ? path.join(esrganBinDir, "models") : "";
     let effectiveModel = needsEsrgan ? resolveNeuralModelName(model, esrganModelsDir, safeScale) : rifeModel;
@@ -1168,7 +1232,8 @@ export async function upscaleAiTask({
     fs.mkdirSync(segDir, { recursive: true });
     fs.mkdirSync(outSegDir, { recursive: true });
 
-    const segSeconds = Math.max(1.5, Math.min(4, Math.round((90 / Math.max(15, sourceFps)) * 10) / 10));
+    const targetFramesPerSeg = srcMeta.width >= 1600 ? 60 : 90;
+    const segSeconds = Math.max(1.0, Math.min(4, Math.round((targetFramesPerSeg / Math.max(15, sourceFps)) * 10) / 10));
     const segRes = await runFfmpegArgs(backend.ffmpegPath, [
       "-hide_banner", "-y", "-i", stagedInput,
       "-c:v", "copy", "-an", "-f", "segment", "-segment_time", String(segSeconds), "-reset_timestamps", "1",
@@ -1185,7 +1250,7 @@ export async function upscaleAiTask({
       return { success: false, status: "segment_failed", error: "No video segments produced for neural pass." };
     }
 
-    const primaryTile = srcMeta.width >= 1600 ? 200 : (srcMeta.width >= 960 ? 256 : 0);
+    const primaryTile = srcMeta.width >= 2000 ? 160 : (srcMeta.width >= 1600 ? 200 : (srcMeta.width >= 960 ? 256 : 0));
     const estTotalFrames = Math.max(1, Math.round(probedDur * sourceFps));
     let globalFramesDone = 0;
     const inferStartMs = Date.now();
@@ -1197,6 +1262,17 @@ export async function upscaleAiTask({
       const segIn = path.join(segDir, segFiles[i]);
       const framesIn = path.join(workDir, `f_in_${i}`);
       fs.mkdirSync(framesIn, { recursive: true });
+      if (typeof onProgress === "function") {
+        onProgress({
+          taskId,
+          stage: "EXTRACT_SEG",
+          segment: i + 1,
+          totalSegments: segFiles.length,
+          model: effectiveModel,
+          scale: effectiveScale,
+          progress: Math.min(90, Math.round(segBase)),
+        });
+      }
 
       const exRes = await runFfmpegArgs(backend.ffmpegPath, [
         "-hide_banner", "-y", "-i", segIn, path.join(framesIn, "f_%06d.png"),
@@ -1355,6 +1431,17 @@ export async function upscaleAiTask({
       }
 
       if (isTaskAborted(taskId)) return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      if (typeof onProgress === "function") {
+        onProgress({
+          taskId,
+          stage: "ENCODE_SEG",
+          segment: i + 1,
+          totalSegments: segFiles.length,
+          model: effectiveModel,
+          scale: effectiveScale,
+          progress: Math.min(91, Math.round(segBase + segSpan * 0.9)),
+        });
+      }
       const segOut = path.join(outSegDir, `out_${i}.mp4`);
       const vfList = [];
       if (denoise) vfList.push("hqdn3d=1.1:1.1:3.5:3.5");

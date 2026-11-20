@@ -741,10 +741,14 @@ export function createKapturaDaemon({
         targetRel.startsWith("js/") ||
         targetRel.startsWith("fonts/");
       const ext = path.extname(targetRel).toLowerCase();
-      if (isPublicStatic && [".html", ".js", ".css", ".woff2", ".svg", ".png"].includes(ext)) {
+      if (isPublicStatic && [".html", ".js", ".mjs", ".css", ".woff2", ".svg", ".png"].includes(ext)) {
         const filePath = safeStaticFile(rootDir, targetRel);
         if (filePath) {
-          res.writeHead(200, { "Content-Type": MIME_MAP[ext] || "application/octet-stream" });
+          const isMutableCode = [".html", ".js", ".mjs", ".css"].includes(ext);
+          res.writeHead(200, {
+            "Content-Type": MIME_MAP[ext] || "application/octet-stream",
+            "Cache-Control": isMutableCode ? "no-store, must-revalidate" : "public, max-age=3600",
+          });
           return fs.createReadStream(filePath).pipe(res);
         }
       }

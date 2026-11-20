@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { createKapturaDaemon } from "../daemon/server.mjs";
+import { resolveFfmpegExecutable } from "../daemon/pipeline/gpuDirectOptimizer.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "../daemon/synkronia/ebwpProtocol.mjs";
 import { hlcEngine } from "../daemon/synkronia/hlcClock.mjs";
 
@@ -221,6 +225,52 @@ async function run() {
         assert.equal(polledJob && polledJob.status, "completed", `Async /upscale-ai job must complete cleanly: ${JSON.stringify(polledJob)}`);
         assert.ok(polledJob.downloadUrl, "Completed async job must provide downloadUrl");
         if (polledJob.videoPath) createdArtifacts.push(polledJob.videoPath);
+
+        // Regression test: native 4K video targeting 4K must short-circuit via GPU_ENHANCE_4K (never 8K blowup)
+        const ffmpegBin = resolveFfmpegExecutable();
+        const src4k = path.join(os.tmpdir(), `kaptura_test_4k_${Date.now()}.mp4`);
+        const mk4k = ffmpegBin
+          ? spawnSync(
+              ffmpegBin,
+              ["-y", "-f", "lavfi", "-i", "testsrc2=size=3840x2160:rate=30:duration=0.2", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", src4k],
+              { encoding: "utf8", windowsHide: true }
+            )
+          : { status: 1 };
+        if (mk4k.status === 0 && fs.existsSync(src4k)) {
+          try {
+            const src4kBuf = fs.readFileSync(src4k);
+            const res4k = await httpRequest(
+              port,
+              "/upscale-ai?async=1",
+              "POST",
+              {
+                "X-Kaptura-Ext": ".mp4",
+                "X-Kaptura-Ai-Model": "realesrgan-x4plus",
+                "X-Kaptura-Width": "3840",
+                "X-Kaptura-Height": "2160",
+                "X-Kaptura-Sharpen": "1.0",
+              },
+              src4kBuf
+            );
+            assert.equal(res4k.status, 202, "4K->4K async submit must return 202");
+            const j4k = JSON.parse(res4k.body.toString("utf8"));
+            let polled4k = null;
+            for (let attempt = 0; attempt < 120; attempt++) {
+              const jr = await httpRequest(port, j4k.pollUrl);
+              assert.equal(jr.status, 200);
+              polled4k = JSON.parse(jr.body.toString("utf8"));
+              if (polled4k.status === "completed" || polled4k.status === "failed" || polled4k.status === "cancelled") break;
+              await new Promise((r) => setTimeout(r, 250));
+            }
+            assert.equal(polled4k && polled4k.status, "completed", `4K native enhance job must complete fast: ${JSON.stringify(polled4k)}`);
+            assert.equal(polled4k.sourceAlreadyTarget, true, "4K source targeting 4K must short-circuit without 8K neural pass");
+            assert.equal(polled4k.width, 3840);
+            assert.equal(polled4k.height, 2160);
+            if (polled4k.videoPath) createdArtifacts.push(polled4k.videoPath);
+          } finally {
+            try { fs.unlinkSync(src4k); } catch {}
+          }
+        }
       }
 
       if (!health.capabilities.rifeAvailable) {

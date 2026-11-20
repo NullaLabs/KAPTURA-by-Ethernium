@@ -1308,13 +1308,52 @@
   });
 
   /* ---- shared dropzone wiring ------------------------------------------- */
+  function triggerDropSplash(x, y, zone, strength) {
+    if (window.KapturaLiquidShader && typeof window.KapturaLiquidShader.triggerWaterDrop === 'function') {
+      window.KapturaLiquidShader.triggerWaterDrop(x, y, strength, zone);
+    }
+  }
   function wireDropzone(zoneId, inputId, onFile) {
     const zone = $(zoneId), input = $(inputId);
-    zone.addEventListener('click', () => input.click());
-    input.addEventListener('change', (e) => { if (e.target.files[0]) onFile(e.target.files[0]); });
-    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-    zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('dragover'); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+    let lastClick = null;
+    zone.addEventListener('click', (e) => {
+      if (e && e.target === input) return;
+      if (e && e.isTrusted && (e.clientX > 0 || e.clientY > 0)) {
+        lastClick = { x: e.clientX, y: e.clientY };
+      }
+      input.click();
+    });
+    input.addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const rect = zone.getBoundingClientRect();
+      const x = lastClick ? lastClick.x : (rect.left + rect.width * 0.5);
+      const y = lastClick ? lastClick.y : (rect.top + rect.height * 0.5);
+      triggerDropSplash(x, y, zone, 0.92);
+      onFile(f);
+    });
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      zone.classList.add('dragover');
+      if (window.KapturaLiquidShader && typeof window.KapturaLiquidShader.triggerHoverTouch === 'function') {
+        window.KapturaLiquidShader.triggerHoverTouch(e.clientX, e.clientY, zone);
+      }
+    });
+    zone.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget && zone.contains(e.relatedTarget)) return;
+      zone.classList.remove('dragover');
+    });
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      const rect = zone.getBoundingClientRect();
+      const dropX = Number.isFinite(e.clientX) && e.clientX > 0 ? e.clientX : (rect.left + rect.width * 0.5);
+      const dropY = Number.isFinite(e.clientY) && e.clientY > 0 ? e.clientY : (rect.top + rect.height * 0.5);
+      triggerDropSplash(dropX, dropY, zone, 1.0);
+      onFile(f);
+    });
   }
   function baseName(n) { const i = n.lastIndexOf('.'); return i > 0 ? n.substring(0, i) : n; }
 
