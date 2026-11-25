@@ -7,10 +7,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { detectVideoBackend, getOptimalGpuEncoderParams } from "./gpuDirectOptimizer.mjs";
+import { detectVideoBackend, getOptimalGpuEncoderParams, probeGpuTelemetry } from "./gpuDirectOptimizer.mjs";
 import { getCompanionStatus, resolveFontTtfPath, resolveRealEsrganExecutable, resolveRifeExecutable, runUpskaletor } from "../providers/adapters.mjs";
 
 const ALLOWED_INPUT_EXTS = new Set([".webm", ".mp4", ".mov", ".mkv", ".avi", ".gif", ".png", ".jpg", ".jpeg", ".webp"]);
+const IMAGE_AI_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"]);
 
 const activeTasks = new Map();
 
@@ -25,7 +26,7 @@ function killProcTree(proc) {
   try { proc.kill("SIGKILL"); } catch { try { proc.kill(); } catch {} }
 }
 
-function registerTask(taskId) {
+export function registerTask(taskId) {
   if (!taskId) return null;
   let rec = activeTasks.get(taskId);
   if (!rec) {
@@ -35,20 +36,38 @@ function registerTask(taskId) {
   return rec;
 }
 
-function unregisterTask(taskId) {
+export function unregisterTask(taskId) {
   if (taskId) activeTasks.delete(taskId);
 }
 
-function isTaskAborted(taskId) {
+export function isTaskAborted(taskId) {
   const rec = taskId ? activeTasks.get(taskId) : null;
   return Boolean(rec && rec.aborted);
 }
 
-function trackChildProc(taskId, proc) {
+export function trackChildProc(taskId, proc) {
   const rec = taskId ? activeTasks.get(taskId) : null;
   if (!rec || !proc) return () => {};
   rec.procs.add(proc);
   return () => { rec.procs.delete(proc); };
+}
+
+/** Soft thermal guard pausing cancelably if GPU reaches >= 86C between heavy segments. */
+export async function applyThermalPacing({ taskId = "", onProgress = null, thresholdC = 86, pauseMs = 1800 } = {}) {
+  if (isTaskAborted(taskId)) return false;
+  const gpu = probeGpuTelemetry();
+  if (!gpu || !gpu.available || gpu.tempC === null || gpu.tempC < thresholdC) return false;
+  if (typeof onProgress === "function") {
+    onProgress({ taskId, stage: "THERMAL_COOLING", gpuTempC: gpu.tempC });
+  }
+  const stepMs = 200;
+  let waited = 0;
+  while (waited < pauseMs) {
+    if (isTaskAborted(taskId)) return false;
+    await new Promise((r) => setTimeout(r, stepMs));
+    waited += stepMs;
+  }
+  return true;
 }
 
 /** Cancel an active GPU transcode/neural task and terminate its child process tree cleanly. */
@@ -69,7 +88,7 @@ function evenDim(n) {
   return v & ~1;
 }
 
-function pruneOldExports(outputDir, maxAgeMs = 60 * 60 * 1000, maxFiles = 20) {
+export function pruneOldExports(outputDir, maxAgeMs = 60 * 60 * 1000, maxFiles = 20) {
   try {
     if (!fs.existsSync(outputDir)) return;
     const now = Date.now();
@@ -95,7 +114,7 @@ function pruneOldExports(outputDir, maxAgeMs = 60 * 60 * 1000, maxFiles = 20) {
   } catch {}
 }
 
-function runFfmpegArgs(ffmpegPath, args, options = {}) {
+export function runFfmpegArgs(ffmpegPath, args, options = {}) {
   const opts = typeof options === "function" ? { onStderrLine: options } : (options || {});
   const { onStderrLine, onProgressMeta, totalDurationSec = 0, taskId = "" } = opts;
 
@@ -167,23 +186,87 @@ export async function probeMediaMeta(ffmpegPath, inputPath) {
   const durM = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(res.stderr);
   const fpsM = /,\s*(\d+(?:\.\d+)?)\s*(?:fps|tbr)\b/.exec(res.stderr);
   const dimM = /Stream #[^\n]*?Video:[^\n]*?,\s*(\d{2,5})x(\d{2,5})\b/.exec(res.stderr);
+  const vcodecM = /Stream #[^\n]*?Video:\s*([a-zA-Z0-9_]+)/.exec(res.stderr);
   const audM = /Stream #[^\n]*?Audio:\s*([a-zA-Z0-9_]+)/.exec(res.stderr);
+  const brM = /bitrate:\s*(\d+)\s*kb\/s/i.exec(res.stderr);
   const duration = durM ? (Number(durM[1]) * 3600 + Number(durM[2]) * 60 + Number(durM[3])) : 0;
   const rawFps = fpsM ? Number(fpsM[1]) : 30;
   const fps = Number.isFinite(rawFps) && rawFps >= 5 && rawFps <= 240 ? rawFps : 30;
   const width = dimM ? Number(dimM[1]) : 0;
   const height = dimM ? Number(dimM[2]) : 0;
+  const ext = path.extname(inputPath || "").toLowerCase();
+  const isImage = IMAGE_AI_EXTS.has(ext) || (ext === ".gif" && duration <= 0.25);
+  let sizeBytes = 0;
+  try {
+    if (inputPath && fs.existsSync(inputPath)) sizeBytes = fs.statSync(inputPath).size;
+  } catch {}
   return {
     duration,
     fps,
     width,
     height,
+    videoCodec: vcodecM ? vcodecM[1].toLowerCase() : null,
+    bitrateKbps: brM ? Number(brM[1]) : 0,
+    sizeBytes,
+    isImage,
     hasAudio: Boolean(audM),
     audioCodec: audM ? audM[1] : null,
   };
 }
 
-function buildIntegrityReceipt(srcMeta, outMeta, elapsedMs, expectedFpsRatio = 1) {
+export function estimateProfileEtas(meta = {}, providers = {}) {
+  const w = Number(meta.width) || 0;
+  const h = Number(meta.height) || 0;
+  const fps = Math.max(1, Number(meta.fps) || 30);
+  const dur = Math.max(0, Number(meta.duration) || 0);
+  const isImg = Boolean(meta.isImage);
+  if (isImg) {
+    const mpx = Math.max(0.5, (w * h) / 1e6 || 1);
+    return {
+      isImage: true,
+      frames: 1,
+      "2k_cas": 1,
+      "4k_cas": 1,
+      "4k_ai": providers.realEsrgan ? Math.max(1, Math.round(1.4 + mpx * 0.6)) : null,
+      restore_ai: providers.realEsrgan ? Math.max(1, Math.round(1.8 + mpx * 0.8)) : null,
+      anime_ai: providers.realEsrgan ? Math.max(1, Math.round(0.8 + mpx * 0.4)) : null,
+      "2x_super": 1,
+      "4x_super": 1,
+      bg_remove: providers.bgRemoval && providers.bgRemoval.birefnet ? 3 : 1,
+    };
+  }
+  const effDur = dur > 0 ? dur : 5;
+  const frames = Math.max(1, Math.round(effDur * fps));
+  const already4k = w >= 3840;
+  const already2k = w >= 2560;
+  const cas2k = Math.max(1, Math.round(frames * (already2k ? 0.02 : 0.012) + 1));
+  const cas4k = Math.max(1, Math.round(frames * (already4k ? 0.025 : 0.016) + 1));
+  const esrganPerFrame = already4k ? 0.025 : (w >= 1200 ? 0.55 : (w >= 900 ? 0.9 : 0.45));
+  const ai4k = providers.realEsrgan ? Math.max(2, Math.round(frames * esrganPerFrame + (already4k ? 1 : 2))) : null;
+  const aiRestore = providers.realEsrgan ? Math.max(2, Math.round(frames * (already4k ? 0.028 : 1.05) + 2)) : null;
+  const aiAnime = providers.realEsrgan ? Math.max(2, Math.round(frames * (already4k ? 0.025 : 0.38) + 2)) : null;
+  const rifePerFrame = w >= 2560 ? 0.45 : (w >= 1280 ? 0.14 : 0.06);
+  const rife2x = providers.rife ? Math.max(2, Math.round(frames * rifePerFrame + 2)) : null;
+  const hybrid = providers.realEsrgan && providers.rife && ai4k !== null && rife2x !== null ? (ai4k + rife2x) : null;
+  const hasCudaRvm = Boolean(providers.bgRemoval && providers.bgRemoval.rvmCuda);
+  const bgPerFrame = hasCudaRvm ? 0.05 : (providers.bgRemoval && providers.bgRemoval.rvmOnnx ? 0.35 : 0.03);
+  const bgRemove = Math.max(2, Math.round(frames * bgPerFrame + 2));
+  return {
+    isImage: false,
+    frames,
+    already4k,
+    "2k_cas": cas2k,
+    "4k_cas": cas4k,
+    "4k_ai": ai4k,
+    restore_ai: aiRestore,
+    anime_ai: aiAnime,
+    rife_2x: rife2x,
+    hybrid_4k_rife: hybrid,
+    bg_remove: bgRemove,
+  };
+}
+
+export function buildIntegrityReceipt(srcMeta, outMeta, elapsedMs, expectedFpsRatio = 1) {
   const targetFps = (srcMeta.fps || 30) * expectedFpsRatio;
   const fpsDriftPct = targetFps > 0 && outMeta.fps > 0
     ? Number((((Math.abs(outMeta.fps - targetFps)) / targetFps) * 100).toFixed(2))
@@ -220,10 +303,11 @@ function escapeDrawtext(text) {
 }
 
 /** Encode with NVENC/AMF and fallback once cleanly to libx264 only on hardware init error. */
-async function encodeWithSafeFallback({
+export async function encodeWithSafeFallback({
   ffmpegPath,
   preArgs,
   container,
+  codec = "auto",
   bitrateMbps,
   quality,
   outputPath,
@@ -231,7 +315,7 @@ async function encodeWithSafeFallback({
   onProgress,
   taskId = "",
 }) {
-  const primary = getOptimalGpuEncoderParams({ container, bitrateMbps, quality });
+  const primary = getOptimalGpuEncoderParams({ container, codec, bitrateMbps, quality });
   const progressFlags = typeof onProgress === "function" ? ["-progress", "pipe:1", "-nostats"] : [];
   const emitMeta = typeof onProgress === "function"
     ? (meta) => onProgress({
@@ -320,6 +404,27 @@ function writeProceduralWaveFrames(framesDir, { width, height, fps, durationSec 
   return totalFrames;
 }
 
+export async function createPreviewClip(ffmpegPath, inputPath, destPath, { previewSec = 2, previewStartSec = 0, taskId = "" } = {}) {
+  const safeDur = Math.max(0.3, Math.min(5.0, Number(previewSec) || 2.0));
+  const safeStart = Math.max(0, Number(previewStartSec) || 0);
+  const args = [
+    "-hide_banner", "-y",
+    ...(safeStart > 0 ? ["-ss", safeStart.toFixed(3)] : []),
+    "-i", inputPath,
+    "-t", safeDur.toFixed(3),
+    "-map", "0:v:0", "-map", "0:a?",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "192k",
+    destPath,
+  ];
+  const res = await runFfmpegArgs(ffmpegPath, args, { taskId });
+  if (res.aborted || isTaskAborted(taskId)) return { ok: false, aborted: true, error: "Cancelled" };
+  if (res.code !== 0 || !fs.existsSync(destPath) || fs.statSync(destPath).size === 0) {
+    return { ok: false, aborted: false, error: (res.stderr || "Preview slice failed").slice(-400) };
+  }
+  return { ok: true, duration: safeDur, startSec: safeStart };
+}
+
 /**
  * Transcode an actual input file or buffer cleanly into exports/ with Lanczos scaling & budget control.
  */
@@ -329,6 +434,7 @@ export async function transcodeMediaTask({
   inputExt = ".webm",
   outputDir = path.resolve(process.cwd(), "exports"),
   container = "mp4",
+  codec = "auto",
   width = 0,
   height = 0,
   fps = 0,
@@ -340,6 +446,8 @@ export async function transcodeMediaTask({
   textOverlay = "",
   startSec = 0,
   endSec = 0,
+  previewSec = 0,
+  previewStartSec = 0,
   taskId: providedTaskId = "",
   onProgress,
 }) {
@@ -388,9 +496,42 @@ export async function transcodeMediaTask({
     const t0 = Date.now();
     if (typeof onProgress === "function") onProgress({ taskId, stage: "PROBING", progress: 5 });
 
-    const trimStart = Math.max(0, Number(startSec) || 0);
-    const trimEnd = Number(endSec) > trimStart ? Number(endSec) : 0;
-    const srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    let trimStart = Math.max(0, Number(startSec) || 0);
+    let trimEnd = Number(endSec) > trimStart ? Number(endSec) : 0;
+    let srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    let previewApplied = false;
+    let previewSourceFile = "";
+    const reqPreviewSec = Number(previewSec) || 0;
+    if (reqPreviewSec > 0 && !srcMeta.isImage) {
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "PREVIEW_SLICE", progress: 8 });
+      const pDur = Math.max(0.3, Math.min(5.0, reqPreviewSec));
+      const pStart = trimStart > 0
+        ? trimStart
+        : Math.max(0, Math.min(Math.max(0, (srcMeta.duration || 0) - pDur), Number(previewStartSec) || 0));
+      const previewClip = path.join(outputDir, `.tmp_prevclip_${taskId}.mp4`);
+      const sliceRes = await createPreviewClip(backend.ffmpegPath, stagedInput, previewClip, {
+        previewSec: pDur,
+        previewStartSec: pStart,
+        taskId,
+      });
+      if (sliceRes.aborted || isTaskAborted(taskId)) {
+        try { if (fs.existsSync(previewClip)) fs.unlinkSync(previewClip); } catch {}
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
+      if (sliceRes.ok) {
+        if (createdTemp && stagedInput && fs.existsSync(stagedInput)) {
+          try { fs.unlinkSync(stagedInput); } catch {}
+        }
+        stagedInput = previewClip;
+        createdTemp = true;
+        previewApplied = true;
+        previewSourceFile = `preview_src_${taskId}.mp4`;
+        try { fs.copyFileSync(previewClip, path.join(outputDir, previewSourceFile)); } catch { previewSourceFile = ""; }
+        trimStart = 0;
+        trimEnd = 0;
+        srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+      }
+    }
     const probedDur = srcMeta.duration;
     const effectiveDur = trimEnd > 0
       ? Math.max(0.2, trimEnd - trimStart)
@@ -453,6 +594,7 @@ export async function transcodeMediaTask({
       ffmpegPath: backend.ffmpegPath,
       preArgs,
       container: outExt,
+      codec,
       bitrateMbps: computedBitrateMbps,
       quality,
       outputPath,
@@ -494,6 +636,9 @@ export async function transcodeMediaTask({
       sharpenFilter: sharpNum > 0 ? (backend.filters && backend.filters.cas ? "cas" : "unsharp") : null,
       hardwareAccelerated: encRes.hardwareAccelerated,
       fallbackCpu: encRes.fallbackCpu,
+      previewMode: previewApplied,
+      previewSourceFile: previewSourceFile || undefined,
+      previewSourceDownloadUrl: previewSourceFile ? `/exports/${previewSourceFile}` : undefined,
       integrity,
       providers: getCompanionStatus(),
     };
@@ -881,9 +1026,7 @@ export async function renderVideoTask({
   }
 }
 
-const IMAGE_AI_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif"]);
-
-function runProcessArgs(binPath, args, cwd, opts = {}) {
+export function runProcessArgs(binPath, args, cwd, opts = {}) {
   const { taskId = "", onOutputLine = null, stallTimeoutMs = 90_000 } = opts || {};
   if (isTaskAborted(taskId)) {
     return Promise.resolve({ code: -2, aborted: true, stalled: false, stdout: "", stderr: "Cancelled" });
@@ -981,6 +1124,9 @@ export async function upscaleAiTask({
   denoise = false,
   sharpen = null,
   quality = "high",
+  codec = "auto",
+  previewSec = 0,
+  previewStartSec = 0,
   taskId: providedTaskId = "",
   onProgress,
 }) {
@@ -1129,7 +1275,31 @@ export async function upscaleAiTask({
     }
 
     if (typeof onProgress === "function") onProgress({ taskId, stage: "SEGMENT_PREP", progress: 8 });
-    const srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    let srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+    let previewApplied = false;
+    let previewSourceFile = "";
+    const reqPreviewSec = Number(previewSec) || 0;
+    if (reqPreviewSec > 0) {
+      const pDur = Math.max(0.3, Math.min(5.0, reqPreviewSec));
+      const pStart = Math.max(0, Math.min(Math.max(0, (srcMeta.duration || 0) - pDur), Number(previewStartSec) || 0));
+      const previewClipPath = path.join(workDir, "preview_clip.mp4");
+      if (typeof onProgress === "function") onProgress({ taskId, stage: "PREVIEW_SLICE", progress: 9 });
+      const sliceRes = await createPreviewClip(backend.ffmpegPath, stagedInput, previewClipPath, {
+        previewSec: pDur,
+        previewStartSec: pStart,
+        taskId,
+      });
+      if (sliceRes.aborted || isTaskAborted(taskId)) {
+        return { success: false, status: "cancelled", error: "Task cancelled by operator." };
+      }
+      if (sliceRes.ok) {
+        stagedInput = previewClipPath;
+        previewApplied = true;
+        previewSourceFile = `preview_src_${taskId}.mp4`;
+        try { fs.copyFileSync(previewClipPath, path.join(outputDir, previewSourceFile)); } catch { previewSourceFile = ""; }
+        srcMeta = await probeMediaMeta(backend.ffmpegPath, stagedInput);
+      }
+    }
     const probedDur = Math.max(0.2, srcMeta.duration);
     const sourceFps = srcMeta.fps || 30;
     const expectedFpsRatio = needsRife ? safeMult : 1;
@@ -1156,6 +1326,7 @@ export async function upscaleAiTask({
         ffmpegPath: backend.ffmpegPath,
         preArgs,
         container: "mp4",
+        codec,
         bitrateMbps: 42,
         quality,
         outputPath,
@@ -1194,6 +1365,9 @@ export async function upscaleAiTask({
         scale: 1,
         neural: false,
         hardwareAccelerated: encRes.hardwareAccelerated,
+        previewMode: previewApplied,
+        previewSourceFile: previewSourceFile || undefined,
+        previewSourceDownloadUrl: previewSourceFile ? `/exports/${previewSourceFile}` : undefined,
         integrity,
         providers: getCompanionStatus(),
       };
@@ -1460,6 +1634,7 @@ export async function upscaleAiTask({
         ffmpegPath: backend.ffmpegPath,
         preArgs: segEncArgs,
         container: "mp4",
+        codec,
         bitrateMbps: needsRife ? 42 : 35,
         quality,
         outputPath: segOut,
@@ -1484,6 +1659,9 @@ export async function upscaleAiTask({
           scale: effectiveScale,
           progress: Math.min(92, Math.round(10 + ((i + 1) / segFiles.length) * 82)),
         });
+      }
+      if (i + 1 < segFiles.length) {
+        await applyThermalPacing({ taskId, onProgress });
       }
     }
 
@@ -1526,6 +1704,9 @@ export async function upscaleAiTask({
       scale: effectiveScale,
       neural: true,
       hardwareAccelerated: true,
+      previewMode: previewApplied,
+      previewSourceFile: previewSourceFile || undefined,
+      previewSourceDownloadUrl: previewSourceFile ? `/exports/${previewSourceFile}` : undefined,
       integrity,
       providers: getCompanionStatus(),
     };

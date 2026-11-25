@@ -108,6 +108,7 @@
       integrity = null,
       engineLabel = '',
       isRife = false,
+      checkerboard = false,
     } = opts;
 
     if (!beforeSrc || !afterSrc) {
@@ -237,6 +238,17 @@
       stepBack.addEventListener('click', () => stepVideo(-1));
       stepFwd.addEventListener('click', () => stepVideo(1));
     }
+
+    const actionGroup = document.createElement('div');
+    actionGroup.className = 'inspector-pill-group';
+    const proofBtn = document.createElement('button');
+    proofBtn.type = 'button';
+    proofBtn.className = 'inspector-pill inspector-pill-proof';
+    proofBtn.textContent = '📸 PROOF PNG';
+    proofBtn.title = 'Exportar tarjeta forense con métricas medidas y comparativa A/B en PNG';
+    proofBtn.addEventListener('click', () => exportProofCard());
+    actionGroup.appendChild(proofBtn);
+    toolbar.appendChild(actionGroup);
 
     // ---- Viewport Canvas ---------------------------------------------------
     const wrap = document.createElement('div');
@@ -468,22 +480,141 @@
       }
 
       ctx.clearRect(0, 0, W, H);
+      const fillCheckerRegion = (rx, ry, rw, rh) => {
+        if (!checkerboard || rw <= 0 || rh <= 0) return;
+        const sq = Math.max(12, Math.round(W / 48));
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rx, ry, rw, rh);
+        ctx.clip();
+        ctx.fillStyle = '#0b1220';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.fillStyle = '#18243a';
+        const y0 = Math.floor(ry / sq) * sq;
+        const x0 = Math.floor(rx / sq) * sq;
+        for (let py = y0; py < ry + rh; py += sq) {
+          for (let px = x0; px < rx + rw; px += sq) {
+            if (((Math.round(px / sq) + Math.round(py / sq)) & 1) === 0) {
+              ctx.fillRect(px, py, sq, sq);
+            }
+          }
+        }
+        ctx.restore();
+      };
       if (state.mode === 'heatmap' && heatmapReady) {
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(heatCanvas, 0, 0, W, H);
       } else if (state.mode === 'side') {
         const halfW = Math.floor(W / 2);
         const sx = Math.floor(W * 0.25);
+        fillCheckerRegion(halfW, 0, W - halfW, H);
         ctx.drawImage(offB, sx, 0, halfW, H, 0, 0, halfW, H);
         ctx.drawImage(offA, sx, 0, halfW, H, halfW, 0, W - halfW, H);
         ctx.fillStyle = 'rgba(0, 240, 255, 0.85)';
         ctx.fillRect(halfW - 1, 0, 2, H);
       } else {
         const splitX = Math.round(W * state.splitRatio);
+        fillCheckerRegion(splitX, 0, W - splitX, H);
         if (splitX > 0) ctx.drawImage(offB, 0, 0, splitX, H, 0, 0, splitX, H);
         if (W - splitX > 0) ctx.drawImage(offA, splitX, 0, W - splitX, H, splitX, 0, W - splitX, H);
         divider.style.left = `${(state.splitRatio * 100).toFixed(2)}%`;
       }
+    }
+
+    function exportProofCard() {
+      drawFrame(true);
+      const srcW = Math.max(320, canvas.width || 1280);
+      const srcH = Math.max(180, canvas.height || 720);
+      const viewW = Math.max(1280, Math.min(1920, srcW));
+      const viewH = Math.round((viewW * srcH) / srcW);
+      const headH = 62;
+      const footH = 82;
+      const outW = viewW;
+      const outH = headH + viewH + footH;
+
+      const pc = document.createElement('canvas');
+      pc.width = outW;
+      pc.height = outH;
+      const pctx = pc.getContext('2d');
+
+      const bgGrad = pctx.createLinearGradient(0, 0, 0, outH);
+      bgGrad.addColorStop(0, '#040711');
+      bgGrad.addColorStop(1, '#091022');
+      pctx.fillStyle = bgGrad;
+      pctx.fillRect(0, 0, outW, outH);
+
+      pctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+      pctx.lineWidth = 2;
+      pctx.strokeRect(1, 1, outW - 2, outH - 2);
+
+      // Header branding
+      pctx.fillStyle = '#00F0FF';
+      pctx.font = 'bold 20px monospace';
+      pctx.fillText('KAPTURA BY ETHERNIUM // FORENSIC OPTICAL PROOF', 26, 38);
+      const modeTag = `${state.mode.toUpperCase()} · ${state.zoom}x LOUPE`;
+      pctx.font = 'bold 15px monospace';
+      pctx.fillStyle = '#00FF9D';
+      const mw = pctx.measureText(modeTag).width;
+      pctx.fillText(modeTag, outW - mw - 26, 38);
+
+      // Viewport composite
+      pctx.drawImage(canvas, 0, headH, viewW, viewH);
+      if (state.mode === 'split') {
+        const sx = Math.round(viewW * state.splitRatio);
+        pctx.fillStyle = '#00F0FF';
+        pctx.fillRect(sx - 1, headH, 3, viewH);
+      }
+
+      // Corner labels
+      const drawTag = (txt, x, y, color) => {
+        pctx.font = 'bold 14px monospace';
+        const tw = pctx.measureText(txt).width + 20;
+        pctx.fillStyle = 'rgba(4, 6, 12, 0.86)';
+        pctx.fillRect(x, y, tw, 28);
+        pctx.strokeStyle = color;
+        pctx.lineWidth = 1.5;
+        pctx.strokeRect(x, y, tw, 28);
+        pctx.fillStyle = color;
+        pctx.fillText(txt, x + 10, y + 19);
+      };
+      drawTag(tagLeft.textContent, 16, headH + 14, '#FFFFFF');
+      const rTxt = tagRight.textContent;
+      pctx.font = 'bold 14px monospace';
+      const rTw = pctx.measureText(rTxt).width + 20;
+      drawTag(rTxt, outW - rTw - 16, headH + 14, '#00FF9D');
+
+      // Footer forensic metrics strip
+      const pills = Array.from(proofBar.querySelectorAll('.proof-pill')).map((el) => el.textContent.trim()).filter(Boolean);
+      let px = 24;
+      let py = headH + viewH + 22;
+      pctx.font = 'bold 13px monospace';
+      pills.forEach((txt) => {
+        const pw = pctx.measureText(txt).width + 22;
+        if (px + pw > outW - 24) {
+          px = 24;
+          py += 32;
+        }
+        pctx.fillStyle = 'rgba(10, 16, 32, 0.94)';
+        pctx.fillRect(px, py, pw, 26);
+        pctx.strokeStyle = txt.includes('+') || txt.includes('MOTOR') ? 'rgba(0, 255, 157, 0.5)' : 'rgba(0, 240, 255, 0.36)';
+        pctx.lineWidth = 1.2;
+        pctx.strokeRect(px, py, pw, 26);
+        pctx.fillStyle = txt.includes('+') ? '#00FF9D' : '#E2E8F0';
+        pctx.fillText(txt, px + 11, py + 17);
+        px += pw + 10;
+      });
+
+      pc.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = `KAPTURA_PROOF_${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 250);
+      }, 'image/png');
     }
 
     function scheduleLoop() {

@@ -40,6 +40,9 @@
         neuralAvailable: Boolean((data && data.capabilities && data.capabilities.neuralAvailable) || (data && data.providers && data.providers.realEsrgan)),
         rifeAvailable: Boolean((data && data.capabilities && data.capabilities.rifeAvailable) || (data && data.providers && data.providers.rife)),
         casFilter: Boolean(data && data.capabilities && data.capabilities.casFilter),
+        bgRemoval: (data && data.capabilities && data.capabilities.bgRemoval) || (data && data.providers && data.providers.bgRemoval) || {},
+        encoders: (data && data.capabilities && data.capabilities.encoders) || {},
+        gpu: (data && data.gpu) || { available: false },
         jobsEndpoint: (data && data.streaming && data.streaming.jobsEndpoint) || null,
         preferredCodec: (data && data.capabilities && data.capabilities.preferredCodec) || null,
         hardwareAccelerated: Boolean(data && data.capabilities && data.capabilities.hardwareAccelerated),
@@ -251,6 +254,7 @@
       'X-Kaptura-Quality': opts.quality || 'high',
       'X-Kaptura-Task-Id': taskId,
     };
+    if (opts.codec) headers['X-Kaptura-Codec'] = String(opts.codec);
     if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
     if (opts.width) headers['X-Kaptura-Width'] = String(opts.width);
     if (opts.height) headers['X-Kaptura-Height'] = String(opts.height);
@@ -261,6 +265,8 @@
     if (opts.cfr) headers['X-Kaptura-Cfr'] = '1';
     if (Number(opts.startSec) > 0) headers['X-Kaptura-Start-Sec'] = String(opts.startSec);
     if (Number(opts.endSec) > 0) headers['X-Kaptura-End-Sec'] = String(opts.endSec);
+    if (Number(opts.previewSec) > 0) headers['X-Kaptura-Preview-Sec'] = String(opts.previewSec);
+    if (Number(opts.previewStartSec) > 0) headers['X-Kaptura-Preview-Start'] = String(opts.previewStartSec);
 
     const keepOnDisk = Boolean(opts.keepOnDisk);
     if (!keepOnDisk && !useAsync) headers['Accept'] = 'application/octet-stream';
@@ -310,6 +316,8 @@
           hardwareAccelerated: Boolean(job.hardwareAccelerated),
           scaleMode: `${job.hardwareAccelerated ? 'NVENC' : 'FFmpeg'} (${job.codec || 'h264'})`,
           integrity: job.integrity || null,
+          previewMode: Boolean(job.previewMode),
+          previewSourceUrl: job.previewSourceDownloadUrl ? `${DAEMON_BASE}${job.previewSourceDownloadUrl}` : '',
           fellBack: false,
           viaDaemon: true,
         };
@@ -334,6 +342,8 @@
           hardwareAccelerated: Boolean(data.hardwareAccelerated),
           scaleMode: `${data.hardwareAccelerated ? 'NVENC' : 'FFmpeg'} (${data.codec || 'h264'})`,
           integrity: data.integrity || null,
+          previewMode: Boolean(data.previewMode),
+          previewSourceUrl: data.previewSourceDownloadUrl ? `${DAEMON_BASE}${data.previewSourceDownloadUrl}` : '',
           fellBack: false,
           viaDaemon: true,
         };
@@ -595,10 +605,13 @@
     if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
     if (opts.width) headers['X-Kaptura-Width'] = String(opts.width);
     if (opts.height) headers['X-Kaptura-Height'] = String(opts.height);
+    if (opts.codec) headers['X-Kaptura-Codec'] = String(opts.codec);
     if (opts.denoise) headers['X-Kaptura-Denoise'] = 'true';
     if (opts.sharpen !== undefined && opts.sharpen !== null && Number.isFinite(Number(opts.sharpen))) {
       headers['X-Kaptura-Sharpen'] = String(opts.sharpen);
     }
+    if (Number(opts.previewSec) > 0) headers['X-Kaptura-Preview-Sec'] = String(opts.previewSec);
+    if (Number(opts.previewStartSec) > 0) headers['X-Kaptura-Preview-Start'] = String(opts.previewStartSec);
 
     if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
     const stopSse = useAsync ? () => {} : subscribeTaskProgress(taskId, opts.onProgress);
@@ -641,7 +654,7 @@
             : (pipeUsed === 'hybrid' ? `Real-ESRGAN (${modelUsed}) + RIFE v4.6` : `Real-ESRGAN (${modelUsed})`));
         return {
           blob: outBlob,
-          remoteUrl: keepOnDisk ? remoteUrl : '',
+          remoteUrl: remoteUrl || '',
           downloadUrl: job.downloadUrl || '',
           outputFile: job.outputFile || '',
           sizeBytes: job.sizeBytes || (outBlob ? outBlob.size : 0),
@@ -653,6 +666,8 @@
           model: modelUsed,
           scaleMode: modeTag,
           integrity: job.integrity || null,
+          previewMode: Boolean(job.previewMode),
+          previewSourceUrl: job.previewSourceDownloadUrl ? `${DAEMON_BASE}${job.previewSourceDownloadUrl}` : '',
           neural: !isNativeCas && job.neural !== false,
           fellBack: false,
           viaDaemon: true,
@@ -687,6 +702,256 @@
     }
   }
 
+  async function probeViaDaemon(fileOrSource, timeoutMs = 6000) {
+    const sourceExport = (fileOrSource && fileOrSource.remoteUrl) || '';
+    const headers = { 'X-Kaptura-Ext': fileExt((fileOrSource && fileOrSource.name) || sourceExport) };
+    if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(`${DAEMON_BASE}/probe`, {
+        method: 'POST',
+        headers,
+        body: sourceExport ? new Uint8Array(0) : fileOrSource,
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function checkUrlAlive(url, timeoutMs = 1200) {
+    if (!url) return false;
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(url, { method: 'HEAD', cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function checkUrlsAliveBatch(urls, timeoutMs = 2000) {
+    if (!Array.isArray(urls) || !urls.length) return {};
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(`${DAEMON_BASE}/vault/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls }),
+        cache: 'no-store',
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      return (data && data.ok && data.alive && typeof data.alive === 'object') ? data.alive : null;
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function pinExportViaDaemon(sourceUrl) {
+    if (!sourceUrl) throw new Error('URL del artefacto requerida para fijar en disco.');
+    const res = await fetch(`${DAEMON_BASE}/vault/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceUrl }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || `No se pudo fijar el artefacto (HTTP ${res.status})`);
+    }
+    return {
+      ...data,
+      remoteUrl: data.downloadUrl ? `${DAEMON_BASE}${data.downloadUrl}` : '',
+    };
+  }
+
+  async function deletePinnedExportViaDaemon(remoteUrl) {
+    if (!remoteUrl || !String(remoteUrl).includes('/exports/vault/')) return { ok: false };
+    try {
+      const target = String(remoteUrl).startsWith('http') ? remoteUrl : `${DAEMON_BASE}${remoteUrl}`;
+      const res = await fetch(target, { method: 'DELETE' });
+      return { ok: res.ok };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  async function uploadBgBackdropViaDaemon(file) {
+    if (!file) return null;
+    const res = await fetch(`${DAEMON_BASE}/remove-bg/backdrop`, {
+      method: 'POST',
+      headers: { 'X-Kaptura-Ext': fileExt(file.name || 'bg.png') },
+      body: file,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || `Backdrop upload failed (HTTP ${res.status})`);
+    }
+    return data;
+  }
+
+  async function removeBgViaDaemon(file, opts) {
+    opts = opts || {};
+    const taskId = opts.taskId || nextTaskId('bg');
+    const sourceExport = opts.sourceExport || (file && file.remoteUrl) || '';
+    const isImg = Boolean(opts.isImage || /\.(png|jpe?g|webp|bmp|avif)$/i.test((file && file.name) || sourceExport));
+    const keepOnDisk = Boolean(opts.keepOnDisk && !isImg);
+    const useAsync = Boolean(cachedHealth && cachedHealth.jobsEndpoint && !opts.forceSync);
+    const backdrop = opts.backdrop || 'transparent';
+    const expectedExt = isImg ? 'png' : (backdrop === 'transparent' ? 'webm' : (backdrop === 'prores' ? 'mov' : 'mp4'));
+
+    const headers = {
+      'X-Kaptura-Ext': fileExt((file && file.name) || sourceExport),
+      'X-Kaptura-Bg-Engine': opts.engine || 'auto',
+      'X-Kaptura-Bg-Backdrop': backdrop,
+      'X-Kaptura-Bg-Color': opts.bgColor || '#050814',
+      'X-Kaptura-Bg-Blur': String(opts.blurStrength ?? 23),
+      'X-Kaptura-Bg-Edge': String(opts.edgeRefine ?? 0),
+      'X-Kaptura-Bg-Decontaminate': opts.decontaminate === false ? '0' : '1',
+      'X-Kaptura-Bg-Key-Color': opts.keyColor || '#00FF00',
+      'X-Kaptura-Bg-Similarity': String(opts.similarity ?? 0.18),
+      'X-Kaptura-Bg-Blend': String(opts.blend ?? 0.08),
+      'X-Kaptura-Task-Id': taskId,
+    };
+    if (opts.codec) headers['X-Kaptura-Codec'] = String(opts.codec);
+    if (opts.bgImageRef) headers['X-Kaptura-Bg-Image-Ref'] = String(opts.bgImageRef);
+    if (sourceExport) headers['X-Kaptura-Source-Export'] = String(sourceExport);
+    if (Number(opts.previewSec) > 0) headers['X-Kaptura-Preview-Sec'] = String(opts.previewSec);
+    if (Number(opts.previewStartSec) > 0) headers['X-Kaptura-Preview-Start'] = String(opts.previewStartSec);
+    if (!useAsync && !keepOnDisk) headers['Accept'] = 'application/octet-stream';
+
+    if (typeof opts.onProgress === 'function') opts.onProgress(0.05, { taskId, stage: 'UPLOADING' });
+    const stopSse = useAsync ? () => {} : subscribeTaskProgress(taskId, opts.onProgress);
+
+    try {
+      const endpoint = useAsync
+        ? `${DAEMON_BASE}/remove-bg?async=1`
+        : (keepOnDisk ? `${DAEMON_BASE}/remove-bg` : `${DAEMON_BASE}/remove-bg?download=1`);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: sourceExport ? new Uint8Array(0) : file,
+        signal: opts.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`);
+        throw new Error(`Daemon :3370 BG Studio failed: ${errText}`);
+      }
+
+      if (useAsync) {
+        const accepted = await res.json();
+        const activeTaskId = (accepted && accepted.taskId) || taskId;
+        if (typeof opts.onProgress === 'function') opts.onProgress(0.06, { taskId: activeTaskId, stage: accepted.status === 'queued' ? 'QUEUED' : 'PROCESSING', queuePosition: accepted.queuePosition });
+        const job = await waitForAsyncJob(activeTaskId, opts);
+        const remoteUrl = job.downloadUrl ? `${DAEMON_BASE}${job.downloadUrl}` : '';
+        let outBlob = null;
+        if (!keepOnDisk && remoteUrl) {
+          const dl = await fetch(remoteUrl, { signal: opts.signal });
+          if (!dl.ok) throw new Error(`Failed to fetch BG result (HTTP ${dl.status})`);
+          outBlob = await dl.blob();
+        }
+        const outExt = job.outputFile && job.outputFile.includes('.') ? job.outputFile.split('.').pop().toLowerCase() : expectedExt;
+        return {
+          blob: outBlob,
+          remoteUrl: remoteUrl || '',
+          downloadUrl: job.downloadUrl || '',
+          outputFile: job.outputFile || '',
+          sizeBytes: job.sizeBytes || (outBlob ? outBlob.size : 0),
+          ext: outExt,
+          width: job.width || 0,
+          height: job.height || 0,
+          hasAlpha: Boolean(job.hasAlpha),
+          engine: job.engine || (opts.engine || 'auto'),
+          model: job.model || '',
+          scaleMode: `${job.engine === 'rvm_cuda' ? 'RVM ResNet50 CUDA FP16' : (job.engine === 'birefnet' ? 'BiRefNet 1024px ONNX' : (job.engine === 'rvm_onnx' ? 'RVM MobileNetV3 ONNX' : 'FFmpeg Chromakey+Despill GPU'))}`,
+          integrity: job.integrity || null,
+          previewMode: Boolean(job.previewMode),
+          previewSourceUrl: job.previewSourceDownloadUrl ? `${DAEMON_BASE}${job.previewSourceDownloadUrl}` : '',
+          viaDaemon: true,
+        };
+      }
+
+      if (keepOnDisk) {
+        const data = await res.json();
+        const remoteUrl = data.downloadUrl ? `${DAEMON_BASE}${data.downloadUrl}` : '';
+        return {
+          blob: null,
+          remoteUrl,
+          downloadUrl: data.downloadUrl || '',
+          outputFile: data.outputFile || '',
+          sizeBytes: data.sizeBytes || 0,
+          ext: expectedExt,
+          width: data.width || 0,
+          height: data.height || 0,
+          hasAlpha: Boolean(data.hasAlpha),
+          engine: data.engine || 'auto',
+          model: data.model || '',
+          scaleMode: `BG Studio :3370 (${data.engine || 'auto'})`,
+          integrity: data.integrity || null,
+          previewMode: Boolean(data.previewMode),
+          previewSourceUrl: data.previewSourceDownloadUrl ? `${DAEMON_BASE}${data.previewSourceDownloadUrl}` : '',
+          viaDaemon: true,
+        };
+      }
+
+      const blob = await res.blob();
+      if (typeof opts.onProgress === 'function') opts.onProgress(1, { taskId, stage: 'COMPLETE' });
+      const integrity = parseIntegrityHeaders(res);
+      return {
+        blob,
+        ext: expectedExt,
+        width: (integrity && integrity.outWidth) || 0,
+        height: (integrity && integrity.outHeight) || 0,
+        hasAlpha: backdrop === 'transparent' || backdrop === 'prores',
+        engine: opts.engine || 'auto',
+        model: res.headers.get('X-Kaptura-Model') || '',
+        scaleMode: `BG Studio :3370 (${res.headers.get('X-Kaptura-Model') || opts.engine || 'auto'})`,
+        integrity,
+        viaDaemon: true,
+      };
+    } finally {
+      stopSse();
+    }
+  }
+
+  async function fetchGpuTelemetry(timeoutMs = 1500) {
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+      const res = await fetch(`${DAEMON_BASE}/telemetry/gpu`, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchJobsList(timeoutMs = 1500) {
+    try {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+      const res = await fetch(`${DAEMON_BASE}/jobs`, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
   async function cancelTaskViaDaemon(taskId) {
     if (!taskId) return { ok: false, cancelled: false };
     try {
@@ -701,6 +966,7 @@
   const api = {
     DAEMON_BASE,
     probeHealth,
+    probeViaDaemon,
     getCachedHealth,
     isReadyForTranscode,
     isNeuralAvailable,
@@ -708,11 +974,19 @@
     subscribeTaskProgress,
     transcodeViaDaemon,
     upscaleAiViaDaemon,
+    uploadBgBackdropViaDaemon,
+    removeBgViaDaemon,
     cancelTaskViaDaemon,
+    checkUrlAlive,
+    checkUrlsAliveBatch,
+    pinExportViaDaemon,
+    deletePinnedExportViaDaemon,
     trimViaDaemon,
     openCaptureSocket,
     renderViaDaemon,
     fetchEbwpTelemetry,
+    fetchGpuTelemetry,
+    fetchJobsList,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

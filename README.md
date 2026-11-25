@@ -1,6 +1,6 @@
 # 📹 KAPTURA by Ethernium
 
-> **CHRONO Capture Studio · Real In-Browser Transcoding, GPU Daemon (`:3370`), 3-Motor AI Pipeline & Forensic Optical Inspector**
+> **CHRONO Capture Studio v3.2 · Real In-Browser Transcoding, BG Studio (BiRefNet + RVM CUDA), HEVC NVENC (`:3370`), Batch Queue & Forensic Optical Inspector**
 
 [![Live Demo](https://img.shields.io/badge/Demo%20en%20Vivo-Abrir%20Studio-00f0ff?style=for-the-badge&logo=googlechrome&logoColor=white)](https://nullalabs.github.io/KAPTURA-by-Ethernium/)
 [![Zero-Cost](https://img.shields.io/badge/Privacy-100%25%20Local--First-green?style=for-the-badge)](https://nullalabs.github.io/KAPTURA-by-Ethernium/)
@@ -32,9 +32,10 @@ Mientras herramientas convencionales se limitan a grabar, recodificar o escalar 
 | **Captura GPU directa a disco sin límite RAM** | ✅ | ⚠️ RAM navegador | ❌ | ✅ WebSocket `:3370` + NVENC |
 | **GIF89a propio (Median-Cut + Floyd-Steinberg + LZW)** | ❌ | ⚠️ Básico | ❌ | ✅ Sub-rect delta `< 14.8 MB` |
 | **Compresor por presupuesto MB + Vectorizador SVG** | ❌ | ❌ | ❌ | ✅ Nativo (`<path>` / SMIL) |
-| **Escalado 2K/4K Lanczos-3 + AMD FidelityFX `cas` + CFR** | ⚠️ Reescalado simple | ❌ | ❌ | ✅ WebGL + FFmpeg GPU |
+| **BG Studio (BiRefNet 1024px + RVM CUDA + WebM/ProRes Alpha)** | ❌ | ❌ | ❌ | ✅ Local GPU + Chroma WebGL |
+| **Escalado 2K/4K Lanczos-3 + AMD FidelityFX `cas` + CFR + HEVC** | ⚠️ Reescalado simple | ❌ | ❌ | ✅ WebGL + FFmpeg H.264/HEVC NVENC |
 | **Real-ESRGAN Vulkan + RIFE v4.6 (`30→60 fps`)** | ❌ | ❌ | ✅ | ✅ Vulkan RTX/GPU (`esrgan` / `rife` / `hybrid`) |
-| **Inspector Óptico Forense integrado (`Δ ×8`, `1×–8×`, Sobel)** | ❌ | ❌ | ❌ | ✅ En vivo sobre el resultado |
+| **Inspector Óptico Forense integrado (`Δ ×8`, `1×–8×`, Sobel, Proof PNG)** | ❌ | ❌ | ❌ | ✅ En vivo + Preview 2s previo |
 | **Benchmark Ground-Truth SSIM / PSNR / VMAF reproducible** | ❌ | ❌ | ❌ | ✅ `npm run benchmark` ([BENCHMARK_PROOF.md](BENCHMARK_PROOF.md)) |
 
 ---

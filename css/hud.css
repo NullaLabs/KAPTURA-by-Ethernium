@@ -981,6 +981,38 @@ select:focus, input:focus {
 }
 .vault-btn:hover { background: var(--cyan); color: #000; border-color: var(--cyan); }
 .vault-btn.del:hover { background: var(--red); color: #FFF; border-color: var(--red); }
+.vault-btn.pin { border-color: rgba(0, 255, 157, 0.35); color: var(--emerald); }
+.vault-btn.pin:hover { background: var(--emerald); color: #020408; border-color: var(--emerald); }
+.vault-card.is-pinned { border-color: rgba(0, 255, 157, 0.38); }
+.vault-card.is-expired { border-color: rgba(245, 158, 11, 0.36); opacity: 0.9; }
+.vault-thumb-expired {
+  width: 100%;
+  height: 155px;
+  border-radius: 14px;
+  margin-bottom: 10px;
+  border: 1px dashed rgba(245, 158, 11, 0.42);
+  background: linear-gradient(160deg, rgba(20, 14, 8, 0.72), rgba(6, 8, 14, 0.92));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  text-align: center;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: #fde68a;
+}
+.vault-pin-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  background: rgba(0, 255, 157, 0.14);
+  color: var(--emerald);
+  border: 1px solid rgba(0, 255, 157, 0.35);
+}
 
 /* COMPACT ROUNDED-SQUARE DROPZONE */
 .dropzone {
@@ -1569,6 +1601,122 @@ select:focus, input:focus {
   color: var(--cyan);
   opacity: 0.9;
 }
+.preflight-strip {
+  display: none;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.preflight-pill {
+  font-family: 'Fira Code', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(6, 10, 18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--white);
+}
+.preflight-pill.is-accent {
+  color: var(--cyan);
+  border-color: rgba(0, 240, 255, 0.42);
+  background: rgba(0, 240, 255, 0.08);
+}
+.preflight-pill.is-eta {
+  color: var(--gold);
+  border-color: rgba(250, 204, 21, 0.42);
+  background: rgba(250, 204, 21, 0.08);
+}
+.preflight-pill.is-emerald {
+  color: var(--emerald);
+  border-color: rgba(0, 255, 157, 0.45);
+  background: rgba(0, 255, 157, 0.1);
+}
+.bg-subcontrols {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 255, 157, 0.25);
+  background: rgba(6, 10, 18, 0.78);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.bg-subitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--cyan);
+}
+.bg-color-input {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 240, 255, 0.45);
+  background: rgba(0, 0, 0, 0.8);
+  cursor: pointer;
+}
+.batch-dock {
+  margin-top: 14px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 240, 255, 0.34);
+  background: linear-gradient(165deg, rgba(8, 12, 22, 0.88), rgba(4, 6, 12, 0.94));
+  backdrop-filter: blur(20px);
+}
+.batch-dock-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.batch-dock-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 185px;
+  overflow-y: auto;
+}
+.batch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+}
+.batch-row-name {
+  color: var(--white);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.batch-row-meta { color: var(--muted); font-size: 10px; }
+.batch-row-state { font-weight: 700; font-size: 10.5px; color: var(--cyan); }
+.batch-row-state.done { color: var(--emerald); }
+.batch-row-state.err { color: var(--red); }
+.gpu-temp-cool { color: var(--emerald) !important; }
+.gpu-temp-warm { color: var(--gold) !important; }
+.gpu-temp-hot { color: var(--red) !important; }
 .sovereign-footer {
   margin-top: 10px;
   padding: 10px 16px 4px;

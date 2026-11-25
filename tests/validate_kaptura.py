@@ -46,7 +46,10 @@ if dupes:
     fail(f"Duplicate HTML ids: {dupes}")
 
 # --- required product tabs --------------------------------------------------
-required_ids = {"tab-recorder", "tab-cinema", "tab-compressor", "tab-svg", "tab-vault", "tab-converter", "tab-upskaletor"}
+required_ids = {
+    "tab-recorder", "tab-cinema", "tab-compressor", "tab-svg",
+    "tab-vault", "tab-converter", "tab-upskaletor", "tab-bgremove",
+}
 missing = sorted(required_ids.difference(parser.ids))
 if missing:
     fail(f"Missing product tabs: {missing}")
@@ -83,14 +86,19 @@ for bad in forbidden:
 # --- modular architecture (no monolith) -------------------------------------
 required_modules = [
     "js/capabilities.js", "js/gif-encoder.js", "js/lanczos.js", "js/lanczos-gl.js",
-    "js/scaler.js", "js/transcoder.js", "js/compressor.js", "js/svg-vector.js", "js/upskaletor.js",
-    "js/vault.js", "js/capture.js", "js/app.js",
+    "js/scaler.js", "js/transcoder.js", "js/compressor.js", "js/svg-vector.js",
+    "js/upskaletor.js", "js/bg-remover.js", "js/vault.js", "js/capture.js",
+    "js/comparator.js", "js/preflight.js", "js/batch-queue.js", "js/app.js",
 ]
 for mod in required_modules:
     if not (ROOT / mod).exists():
         fail(f"Missing required module file: {mod}")
     if mod not in parser.scripts:
         fail(f"index.html does not load module: {mod}")
+
+for pwa_asset in ("manifest.json", "sw.js", "icons/kaptura-icon.svg"):
+    if not (ROOT / pwa_asset).exists():
+        fail(f"Missing required offline PWA asset: {pwa_asset}")
 
 # index.html must NOT carry a big inline <script> (stay modular)
 if "drawVisualGenetics" in HTML or HTML.count("function ") > 3:

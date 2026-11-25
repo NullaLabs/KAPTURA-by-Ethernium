@@ -10,8 +10,9 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, cancelTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
-import { detectVideoBackend } from "./pipeline/gpuDirectOptimizer.mjs";
+import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, probeMediaMeta, estimateProfileEtas, cancelTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
+import { removeBgTask } from "./pipeline/bgRemovePipeline.mjs";
+import { detectVideoBackend, probeGpuTelemetry } from "./pipeline/gpuDirectOptimizer.mjs";
 import { getCompanionStatus } from "./providers/adapters.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "./synkronia/ebwpProtocol.mjs";
 import { hlcEngine } from "./synkronia/hlcClock.mjs";
@@ -125,11 +126,48 @@ export function createKapturaDaemon({
   connectIpc = false,
 } = {}) {
   const exportsDir = path.join(rootDir, "exports");
+  const vaultExportsDir = path.join(exportsDir, "vault");
+  const jobsRegistryPath = path.join(exportsDir, ".jobs_registry.json");
   fs.mkdirSync(exportsDir, { recursive: true });
+  fs.mkdirSync(vaultExportsDir, { recursive: true });
   let activePort = port;
   let ipcHandle = null;
   const sseClients = new Set();
   const jobs = new Map();
+  const gpuQueue = [];
+  let gpuRunning = false;
+
+  const saveJobsRegistry = () => {
+    try {
+      const list = Array.from(jobs.values()).slice(-64);
+      const tmp = `${jobsRegistryPath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(list), "utf8");
+      fs.renameSync(tmp, jobsRegistryPath);
+    } catch { /* non-fatal registry persistence */ }
+  };
+
+  const loadJobsRegistry = () => {
+    try {
+      if (!fs.existsSync(jobsRegistryPath)) return;
+      const parsed = JSON.parse(fs.readFileSync(jobsRegistryPath, "utf8"));
+      if (!Array.isArray(parsed)) return;
+      let changed = false;
+      for (const rec of parsed.slice(-64)) {
+        if (!rec || !rec.taskId) continue;
+        if (rec.status === "running" || rec.status === "queued") {
+          rec.status = "interrupted";
+          rec.stage = "INTERRUPTED";
+          rec.queuePosition = 0;
+          rec.error = "Interrumpido por reinicio del daemon :3370.";
+          rec.updatedAt = Date.now();
+          changed = true;
+        }
+        jobs.set(rec.taskId, rec);
+      }
+      if (changed) saveJobsRegistry();
+    } catch { /* ignore malformed registry */ }
+  };
+  loadJobsRegistry();
 
   const pruneJobsMap = () => {
     while (jobs.size >= 64) {
@@ -137,6 +175,54 @@ export function createKapturaDaemon({
       if (!oldestKey) break;
       jobs.delete(oldestKey);
     }
+  };
+
+  const syncQueuePositions = () => {
+    let pos = 1;
+    for (const entry of gpuQueue) {
+      if (!entry.cancelled && entry.jobRec && entry.jobRec.status === "queued") {
+        entry.jobRec.queuePosition = pos++;
+      }
+    }
+  };
+
+  const drainGpuQueue = () => {
+    if (gpuRunning) return;
+    while (gpuQueue.length > 0) {
+      const next = gpuQueue.shift();
+      syncQueuePositions();
+      if (!next || next.cancelled || (next.jobRec && next.jobRec.status === "cancelled")) {
+        saveJobsRegistry();
+        continue;
+      }
+      gpuRunning = true;
+      next.jobRec.status = "running";
+      next.jobRec.queuePosition = 0;
+      next.jobRec.stage = "GPU_START";
+      next.jobRec.updatedAt = Date.now();
+      emitProgressEvent({ taskId: next.taskId, stage: "GPU_START", progress: next.jobRec.progress || 5 });
+      Promise.resolve()
+        .then(() => next.runner())
+        .catch(() => {})
+        .finally(() => {
+          gpuRunning = false;
+          saveJobsRegistry();
+          setImmediate(drainGpuQueue);
+        });
+      break;
+    }
+  };
+
+  const enqueueGpuJob = (taskId, jobRec, runner) => {
+    pruneJobsMap();
+    const shouldQueue = gpuRunning || gpuQueue.length > 0;
+    jobRec.status = shouldQueue ? "queued" : "running";
+    jobRec.stage = shouldQueue ? "QUEUED" : "STARTING";
+    jobRec.queuePosition = shouldQueue ? (gpuQueue.length + 1) : 0;
+    jobs.set(taskId, jobRec);
+    saveJobsRegistry();
+    gpuQueue.push({ taskId, jobRec, runner, cancelled: false });
+    drainGpuQueue();
   };
 
   const emitProgressEvent = (evt) => {
@@ -197,15 +283,21 @@ export function createKapturaDaemon({
         hardwareAccelerated: backend.hardwareAccelerated,
         neuralAvailable: Boolean(providers.realEsrgan),
         rifeAvailable: Boolean(providers.rife),
+        bgRemoval: providers.bgRemoval,
         casFilter: Boolean(backend.filters && backend.filters.cas),
         encoders: backend.encoders,
       },
+      gpu: probeGpuTelemetry(),
       streaming: {
         wsCapture: "/ws/capture",
         sseEvents: "/events",
         rangeSupported: true,
+        probeEndpoint: "/probe",
         trimEndpoint: "/trim",
         upscaleAiEndpoint: "/upscale-ai",
+        removeBgEndpoint: "/remove-bg",
+        gpuTelemetryEndpoint: "/telemetry/gpu",
+        vaultPinEndpoint: "/vault/pin",
         cancelEndpoint: "/cancel",
         jobsEndpoint: "/jobs",
       },
@@ -215,6 +307,7 @@ export function createKapturaDaemon({
         upskalator: providers.upskalator,
         realEsrgan: Boolean(providers.realEsrgan),
         rife: Boolean(providers.rife),
+        bgRemoval: providers.bgRemoval,
       },
       hlc: hlcEngine.now(),
     };
@@ -239,10 +332,10 @@ export function createKapturaDaemon({
 
   const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode, X-Kaptura-Async"
+      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Codec, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Preview-Sec, X-Kaptura-Preview-Start, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode, X-Kaptura-Async, X-Kaptura-Bg-Engine, X-Kaptura-Bg-Backdrop, X-Kaptura-Bg-Color, X-Kaptura-Bg-Blur, X-Kaptura-Bg-Edge, X-Kaptura-Bg-Decontaminate, X-Kaptura-Bg-Key-Color, X-Kaptura-Bg-Similarity, X-Kaptura-Bg-Blend, X-Kaptura-Bg-Image-Ref"
     );
     res.setHeader(
       "Access-Control-Expose-Headers",
@@ -260,6 +353,10 @@ export function createKapturaDaemon({
 
     if (req.method === "GET" && (pathname === "/health" || pathname === "/status" || pathname === "/capabilities")) {
       return sendJson(res, 200, buildHealthPayload());
+    }
+
+    if (req.method === "GET" && pathname === "/telemetry/gpu") {
+      return sendJson(res, 200, { ok: true, ...probeGpuTelemetry() });
     }
 
     if (req.method === "GET" && pathname === "/telemetry/ebwp") {
@@ -342,6 +439,105 @@ export function createKapturaDaemon({
       return fs.createReadStream(exportFile).pipe(res);
     }
 
+    if (req.method === "DELETE" && pathname.startsWith("/exports/vault/")) {
+      const rawRel = decodeURIComponent(pathname.slice("/exports/vault/".length)).replace(/^\/+/, "");
+      const pinnedFile = rawRel && !rawRel.includes("/") && !rawRel.includes("\\") ? safeStaticFile(vaultExportsDir, rawRel) : null;
+      if (!pinnedFile) return sendJson(res, 404, { ok: false, error: "Pinned vault artifact not found" });
+      try {
+        fs.unlinkSync(pinnedFile);
+        return sendJson(res, 200, { ok: true, deleted: true, fileName: path.basename(pinnedFile) });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/vault/pin") {
+      try {
+        const rawJson = await readRequestBody(req, 1024 * 1024);
+        let body;
+        try {
+          body = JSON.parse(rawJson.toString("utf8") || "{}");
+        } catch {
+          return sendJson(res, 400, { ok: false, error: "Invalid JSON payload" });
+        }
+        const resolved = resolveExportRef(body.sourceUrl || body.exportFile);
+        if (!resolved) {
+          return sendJson(res, 404, { ok: false, error: "Referenced export artifact not found on disk." });
+        }
+        const fileName = path.basename(resolved);
+        const destPath = path.join(vaultExportsDir, fileName);
+        if (path.resolve(resolved) !== path.resolve(destPath)) {
+          fs.copyFileSync(resolved, destPath);
+        }
+        const st = fs.statSync(destPath);
+        return sendJson(res, 200, {
+          ok: true,
+          pinned: true,
+          fileName,
+          sizeBytes: st.size,
+          downloadUrl: `/exports/vault/${encodeURIComponent(fileName)}`,
+        });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/vault/check") {
+      try {
+        const rawJson = await readRequestBody(req, 1024 * 1024);
+        const body = JSON.parse(rawJson.toString("utf8") || "{}");
+        const urls = Array.isArray(body.urls) ? body.urls.slice(0, 500) : [];
+        const alive = {};
+        for (const u of urls) {
+          if (typeof u !== "string" || !u) continue;
+          alive[u] = Boolean(resolveExportRef(u));
+        }
+        return sendJson(res, 200, { ok: true, alive });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/probe") {
+      let probeTmp = "";
+      try {
+        const backend = detectVideoBackend();
+        if (!backend.available || !backend.ffmpegPath) {
+          return sendJson(res, 422, { ok: false, error: "FFmpeg binary not detected on host." });
+        }
+        const h = req.headers;
+        const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        let targetPath = "";
+        if (sourceExport) {
+          const resolved = resolveExportRef(sourceExport);
+          if (!resolved) return sendJson(res, 404, { ok: false, error: "Referenced export artifact not found." });
+          targetPath = resolved;
+        } else {
+          const rawExt = normalizeUploadExt(h["x-kaptura-ext"] || url.searchParams.get("ext"), ".mp4");
+          probeTmp = path.join(exportsDir, `.tmp_probe_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${rawExt}`);
+          const bytes = await streamRequestToFile(req, probeTmp, 512 * 1024 * 1024);
+          if (!bytes) {
+            try { if (fs.existsSync(probeTmp)) fs.unlinkSync(probeTmp); } catch {}
+            return sendJson(res, 400, { ok: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+          }
+          targetPath = probeTmp;
+        }
+        const meta = await probeMediaMeta(backend.ffmpegPath, targetPath);
+        const providers = getCompanionStatus();
+        const estimates = estimateProfileEtas(meta, providers);
+        return sendJson(res, 200, {
+          ok: true,
+          ...meta,
+          already4k: (meta.width || 0) >= 3840,
+          estimates,
+        });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        if (probeTmp) try { if (fs.existsSync(probeTmp)) fs.unlinkSync(probeTmp); } catch {}
+      }
+    }
+
     if (req.method === "POST" && pathname === "/trim") {
       try {
         const h = req.headers;
@@ -408,6 +604,16 @@ export function createKapturaDaemon({
       }
     }
 
+    if (req.method === "GET" && pathname === "/jobs") {
+      const list = Array.from(jobs.values()).slice(-32).reverse();
+      return sendJson(res, 200, {
+        ok: true,
+        activeCount: gpuRunning ? 1 : 0,
+        queuedCount: gpuQueue.filter((e) => !e.cancelled).length,
+        jobs: list,
+      });
+    }
+
     if (req.method === "GET" && pathname.startsWith("/jobs/")) {
       const targetJobId = decodeURIComponent(pathname.slice("/jobs/".length)).trim();
       const job = targetJobId ? jobs.get(targetJobId) : null;
@@ -422,6 +628,7 @@ export function createKapturaDaemon({
         const isAsync = url.searchParams.get("async") === "1" || String(h["x-kaptura-async"] || "") === "1";
         const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
         const container = String(h["x-kaptura-container"] || url.searchParams.get("container") || "mp4");
+        const codec = String(h["x-kaptura-codec"] || url.searchParams.get("codec") || "auto");
         const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || `tx_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
         let inputPath = "";
         if (sourceExport) {
@@ -452,6 +659,8 @@ export function createKapturaDaemon({
         const cfr = cfrHeader === "1" || cfrHeader === "true";
         const startSec = Number(h["x-kaptura-start-sec"] || url.searchParams.get("startSec") || 0);
         const endSec = Number(h["x-kaptura-end-sec"] || url.searchParams.get("endSec") || 0);
+        const previewSec = Number(h["x-kaptura-preview-sec"] || url.searchParams.get("previewSec") || 0);
+        const previewStartSec = Number(h["x-kaptura-preview-start"] || url.searchParams.get("previewStart") || 0);
 
         const taskParams = {
           inputPath,
@@ -459,6 +668,7 @@ export function createKapturaDaemon({
           inputExt,
           outputDir: exportsDir,
           container,
+          codec,
           width,
           height,
           fps,
@@ -469,25 +679,25 @@ export function createKapturaDaemon({
           cfr,
           startSec,
           endSec,
+          previewSec,
+          previewStartSec,
           taskId,
           onProgress: emitProgressEvent,
         };
 
         if (isAsync) {
-          pruneJobsMap();
           const jobRec = {
             ok: true,
             taskId,
+            kind: "transcode",
             status: "running",
             progress: 5,
             stage: "QUEUED",
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
-          jobs.set(taskId, jobRec);
-          sendJson(res, 202, { ok: true, taskId, status: "running", pollUrl: `/jobs/${encodeURIComponent(taskId)}` });
           const tmpToClean = uploadTmpPath;
-          (async () => {
+          enqueueGpuJob(taskId, jobRec, async () => {
             try {
               const result = await transcodeMediaTask(taskParams);
               if (!result.success) {
@@ -511,9 +721,16 @@ export function createKapturaDaemon({
               Object.assign(jobRec, { status: "failed", stage: "FAILED", error: err instanceof Error ? err.message : String(err), updatedAt: Date.now() });
             } finally {
               if (tmpToClean) try { if (fs.existsSync(tmpToClean)) fs.unlinkSync(tmpToClean); } catch {}
+              saveJobsRegistry();
             }
-          })();
-          return;
+          });
+          return sendJson(res, 202, {
+            ok: true,
+            taskId,
+            status: jobRec.status,
+            queuePosition: jobRec.queuePosition || 0,
+            pollUrl: `/jobs/${encodeURIComponent(taskId)}`,
+          });
         }
 
         let result;
@@ -554,17 +771,186 @@ export function createKapturaDaemon({
       if (!targetTaskId) {
         return sendJson(res, 400, { ok: false, error: "Task ID is required." });
       }
+      let cancelledQueued = false;
+      for (const entry of gpuQueue) {
+        if (entry.taskId === targetTaskId && !entry.cancelled) {
+          entry.cancelled = true;
+          cancelledQueued = true;
+        }
+      }
       const resCancel = cancelTask(targetTaskId);
       const job = jobs.get(targetTaskId);
-      if (job && job.status === "running") {
+      if (job && (job.status === "running" || job.status === "queued")) {
         job.status = "cancelled";
         job.stage = "CANCELLED";
+        job.queuePosition = 0;
         job.updatedAt = Date.now();
+        syncQueuePositions();
+        saveJobsRegistry();
       }
-      if (resCancel.cancelled) {
+      const cancelled = Boolean(resCancel.cancelled || cancelledQueued);
+      if (cancelled) {
         emitProgressEvent({ taskId: targetTaskId, stage: "CANCELLED", progress: 0 });
       }
-      return sendJson(res, 200, { ok: true, taskId: targetTaskId, cancelled: Boolean(resCancel.cancelled) });
+      return sendJson(res, 200, { ok: true, taskId: targetTaskId, cancelled });
+    }
+
+    if (req.method === "POST" && pathname === "/remove-bg/backdrop") {
+      try {
+        const rawExt = normalizeUploadExt(req.headers["x-kaptura-ext"] || url.searchParams.get("ext"), ".png");
+        const refName = `.tmp_bg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${rawExt}`;
+        const destPath = path.join(exportsDir, refName);
+        const bytes = await streamRequestToFile(req, destPath, 40 * 1024 * 1024);
+        if (!bytes) {
+          try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+          return sendJson(res, 400, { ok: false, error: "Empty backdrop image (0 bytes)." });
+        }
+        return sendJson(res, 200, { ok: true, backdropRef: refName, sizeBytes: bytes });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    if (req.method === "POST" && pathname === "/remove-bg") {
+      let uploadTmpPath = "";
+      let bgImageTmpPath = "";
+      try {
+        const h = req.headers;
+        const isAsync = url.searchParams.get("async") === "1" || String(h["x-kaptura-async"] || "") === "1";
+        const sourceExport = String(h["x-kaptura-source-export"] || url.searchParams.get("sourceExport") || "");
+        const taskId = String(h["x-kaptura-task-id"] || url.searchParams.get("taskId") || `bg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+        let inputPath = "";
+        if (sourceExport) {
+          const resolved = resolveExportRef(sourceExport);
+          if (!resolved) {
+            return sendJson(res, 404, { success: false, status: "missing_input", error: "Referenced export artifact not found." });
+          }
+          inputPath = resolved;
+        } else {
+          const rawExt = normalizeUploadExt(h["x-kaptura-ext"] || url.searchParams.get("ext"), ".png");
+          uploadTmpPath = path.join(exportsDir, `.tmp_upload_${taskId}${rawExt}`);
+          const bytes = await streamRequestToFile(req, uploadTmpPath);
+          if (!bytes) {
+            try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
+            return sendJson(res, 400, { success: false, status: "empty_input", error: "Empty media payload (0 bytes)." });
+          }
+          inputPath = uploadTmpPath;
+        }
+
+        const bgRef = String(h["x-kaptura-bg-image-ref"] || url.searchParams.get("bgRef") || "").trim();
+        if (bgRef && !bgRef.includes("/") && !bgRef.includes("\\") && bgRef.startsWith(".tmp_bg_")) {
+          const candidateBg = path.join(exportsDir, bgRef);
+          if (fs.existsSync(candidateBg) && fs.statSync(candidateBg).isFile()) {
+            bgImageTmpPath = candidateBg;
+          }
+        }
+
+        const taskParams = {
+          inputPath,
+          inputBuffer: null,
+          inputExt: path.extname(inputPath).toLowerCase() || ".png",
+          outputDir: exportsDir,
+          engine: String(h["x-kaptura-bg-engine"] || url.searchParams.get("engine") || "auto"),
+          backdrop: String(h["x-kaptura-bg-backdrop"] || url.searchParams.get("backdrop") || "transparent"),
+          bgColor: String(h["x-kaptura-bg-color"] || url.searchParams.get("bgColor") || "#050814"),
+          bgImagePath: bgImageTmpPath,
+          blurStrength: Number(h["x-kaptura-bg-blur"] || url.searchParams.get("blurStrength") || 23),
+          edgeRefine: Number(h["x-kaptura-bg-edge"] || url.searchParams.get("edgeRefine") || 0),
+          decontaminate: String(h["x-kaptura-bg-decontaminate"] ?? url.searchParams.get("decontaminate") ?? "1") !== "0",
+          keyColor: String(h["x-kaptura-bg-key-color"] || url.searchParams.get("keyColor") || "#00FF00"),
+          similarity: Number(h["x-kaptura-bg-similarity"] || url.searchParams.get("similarity") || 0.18),
+          blend: Number(h["x-kaptura-bg-blend"] || url.searchParams.get("blend") || 0.08),
+          codec: String(h["x-kaptura-codec"] || url.searchParams.get("codec") || "auto"),
+          previewSec: Number(h["x-kaptura-preview-sec"] || url.searchParams.get("previewSec") || 0),
+          previewStartSec: Number(h["x-kaptura-preview-start"] || url.searchParams.get("previewStart") || 0),
+          taskId,
+          onProgress: emitProgressEvent,
+        };
+
+        if (isAsync) {
+          const jobRec = {
+            ok: true,
+            taskId,
+            kind: "bgremove",
+            status: "running",
+            progress: 5,
+            stage: "QUEUED",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          const tmpToClean = uploadTmpPath;
+          const bgToClean = bgImageTmpPath;
+          enqueueGpuJob(taskId, jobRec, async () => {
+            try {
+              const result = await removeBgTask(taskParams);
+              if (!result.success) {
+                Object.assign(jobRec, {
+                  status: result.status === "cancelled" ? "cancelled" : "failed",
+                  error: result.error || result.status || "BG Studio failed",
+                  stage: result.status === "cancelled" ? "CANCELLED" : "FAILED",
+                  updatedAt: Date.now(),
+                });
+              } else {
+                Object.assign(jobRec, {
+                  ...result,
+                  status: "completed",
+                  progress: 100,
+                  stage: "COMPLETE",
+                  downloadUrl: `/exports/${result.outputFile}`,
+                  updatedAt: Date.now(),
+                });
+              }
+            } catch (err) {
+              Object.assign(jobRec, { status: "failed", stage: "FAILED", error: err instanceof Error ? err.message : String(err), updatedAt: Date.now() });
+            } finally {
+              if (tmpToClean) try { if (fs.existsSync(tmpToClean)) fs.unlinkSync(tmpToClean); } catch {}
+              if (bgToClean) try { if (fs.existsSync(bgToClean)) fs.unlinkSync(bgToClean); } catch {}
+              saveJobsRegistry();
+            }
+          });
+          return sendJson(res, 202, {
+            ok: true,
+            taskId,
+            status: jobRec.status,
+            queuePosition: jobRec.queuePosition || 0,
+            pollUrl: `/jobs/${encodeURIComponent(taskId)}`,
+          });
+        }
+
+        let result;
+        try {
+          result = await removeBgTask(taskParams);
+        } finally {
+          if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
+          if (bgImageTmpPath) try { if (fs.existsSync(bgImageTmpPath)) fs.unlinkSync(bgImageTmpPath); } catch {}
+        }
+
+        if (!result.success) {
+          const code = result.status === "cancelled" ? 409 : (result.status === "empty_input" || result.status === "missing_input" ? 400 : 422);
+          return sendJson(res, code, result);
+        }
+        if (url.searchParams.get("download") === "1" || h["accept"] === "application/octet-stream") {
+          const ext = path.extname(result.outputFile).toLowerCase();
+          const mime = ext === ".png" ? "image/png" : (ext === ".webm" ? "video/webm" : (ext === ".mov" ? "video/quicktime" : "video/mp4"));
+          const hdrs = applyForensicHeaders({
+            "Content-Type": mime,
+            "Content-Disposition": `attachment; filename="${result.outputFile}"`,
+            "X-Kaptura-Codec": result.codec || "",
+            "X-Kaptura-Model": result.model || "",
+          }, result);
+          res.writeHead(200, hdrs);
+          const fileStream = fs.createReadStream(result.videoPath);
+          fileStream.once("close", () => {
+            try { if (fs.existsSync(result.videoPath)) fs.unlinkSync(result.videoPath); } catch {}
+          });
+          return fileStream.pipe(res);
+        }
+        return sendJson(res, 200, { ...result, downloadUrl: `/exports/${result.outputFile}` });
+      } catch (err) {
+        if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
+        if (bgImageTmpPath) try { if (fs.existsSync(bgImageTmpPath)) fs.unlinkSync(bgImageTmpPath); } catch {}
+        return sendJson(res, 500, { success: false, error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     if (req.method === "POST" && pathname === "/upscale-ai") {
@@ -602,6 +988,9 @@ export function createKapturaDaemon({
         const rawSharpen = h["x-kaptura-sharpen"] ?? url.searchParams.get("sharpen");
         const sharpen = rawSharpen !== undefined && rawSharpen !== "" ? Number(rawSharpen) : null;
         const quality = String(h["x-kaptura-quality"] || url.searchParams.get("quality") || "high");
+        const codec = String(h["x-kaptura-codec"] || url.searchParams.get("codec") || "auto");
+        const previewSec = Number(h["x-kaptura-preview-sec"] || url.searchParams.get("previewSec") || 0);
+        const previewStartSec = Number(h["x-kaptura-preview-start"] || url.searchParams.get("previewStart") || 0);
 
         const taskParams = {
           inputPath,
@@ -617,25 +1006,26 @@ export function createKapturaDaemon({
           denoise,
           sharpen,
           quality,
+          codec,
+          previewSec,
+          previewStartSec,
           taskId,
           onProgress: emitProgressEvent,
         };
 
         if (isAsync) {
-          pruneJobsMap();
           const jobRec = {
             ok: true,
             taskId,
+            kind: "upscale-ai",
             status: "running",
             progress: 5,
             stage: "QUEUED",
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
-          jobs.set(taskId, jobRec);
-          sendJson(res, 202, { ok: true, taskId, status: "running", pollUrl: `/jobs/${encodeURIComponent(taskId)}` });
           const tmpToClean = uploadTmpPath;
-          (async () => {
+          enqueueGpuJob(taskId, jobRec, async () => {
             try {
               const result = await upscaleAiTask(taskParams);
               if (!result.success) {
@@ -659,9 +1049,16 @@ export function createKapturaDaemon({
               Object.assign(jobRec, { status: "failed", stage: "FAILED", error: err instanceof Error ? err.message : String(err), updatedAt: Date.now() });
             } finally {
               if (tmpToClean) try { if (fs.existsSync(tmpToClean)) fs.unlinkSync(tmpToClean); } catch {}
+              saveJobsRegistry();
             }
-          })();
-          return;
+          });
+          return sendJson(res, 202, {
+            ok: true,
+            taskId,
+            status: jobRec.status,
+            queuePosition: jobRec.queuePosition || 0,
+            pollUrl: `/jobs/${encodeURIComponent(taskId)}`,
+          });
         }
 
         let result;
@@ -737,14 +1134,18 @@ export function createKapturaDaemon({
       const targetRel = pathname === "/" || pathname === "/index.html" ? "index.html" : pathname.slice(1);
       const isPublicStatic =
         targetRel === "index.html" ||
+        targetRel === "manifest.json" ||
+        targetRel === "sw.js" ||
+        targetRel.startsWith("icons/") ||
         targetRel.startsWith("css/") ||
         targetRel.startsWith("js/") ||
         targetRel.startsWith("fonts/");
       const ext = path.extname(targetRel).toLowerCase();
-      if (isPublicStatic && [".html", ".js", ".mjs", ".css", ".woff2", ".svg", ".png"].includes(ext)) {
+      const allowedExt = [".html", ".js", ".mjs", ".css", ".woff2", ".svg", ".png"].includes(ext) || targetRel === "manifest.json";
+      if (isPublicStatic && allowedExt) {
         const filePath = safeStaticFile(rootDir, targetRel);
         if (filePath) {
-          const isMutableCode = [".html", ".js", ".mjs", ".css"].includes(ext);
+          const isMutableCode = [".html", ".js", ".mjs", ".css", ".json"].includes(ext);
           res.writeHead(200, {
             "Content-Type": MIME_MAP[ext] || "application/octet-stream",
             "Cache-Control": isMutableCode ? "no-store, must-revalidate" : "public, max-age=3600",
@@ -856,10 +1257,14 @@ export function createKapturaDaemon({
       new Promise((resolve) => {
         clearInterval(sseKeepAlive);
         for (const [id, rec] of jobs.entries()) {
-          if (rec && rec.status === "running") {
+          if (rec && (rec.status === "running" || rec.status === "queued")) {
+            rec.status = "interrupted";
+            rec.stage = "INTERRUPTED";
+            rec.queuePosition = 0;
             try { cancelTask(id); } catch {}
           }
         }
+        saveJobsRegistry();
         for (const client of sseClients) {
           try { client.end(); } catch {}
         }

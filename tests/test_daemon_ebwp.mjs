@@ -1,10 +1,57 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import zlib from "node:zlib";
 import { createKapturaDaemon } from "../daemon/server.mjs";
+
+function makeTestPng(w = 32, h = 32) {
+  const crcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    crcTable[n] = c >>> 0;
+  }
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const t = Buffer.from(type, "ascii");
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const body = Buffer.concat([t, data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body), 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // RGBA
+  const raw = Buffer.alloc(h * (1 + w * 4));
+  for (let y = 0; y < h; y++) {
+    const rowOff = y * (1 + w * 4);
+    raw[rowOff] = 0;
+    for (let x = 0; x < w; x++) {
+      const px = rowOff + 1 + x * 4;
+      const inside = Math.abs(x - w / 2) + Math.abs(y - h / 2) < w * 0.28;
+      raw[px] = inside ? 240 : 0;
+      raw[px + 1] = inside ? 245 : 255;
+      raw[px + 2] = inside ? 255 : 0;
+      raw[px + 3] = 255;
+    }
+  }
+  const idat = zlib.deflateSync(raw);
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 import { resolveFfmpegExecutable } from "../daemon/pipeline/gpuDirectOptimizer.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "../daemon/synkronia/ebwpProtocol.mjs";
 import { hlcEngine } from "../daemon/synkronia/hlcClock.mjs";
@@ -59,6 +106,17 @@ async function run() {
     assert.equal(health.capabilities && typeof health.capabilities.rifeAvailable, "boolean", "Daemon /health must report rifeAvailable capability");
     assert.equal(health.streaming && health.streaming.cancelEndpoint, "/cancel", "Daemon /health must expose /cancel endpoint");
     assert.equal(health.streaming && health.streaming.jobsEndpoint, "/jobs", "Daemon /health must expose /jobs endpoint");
+    assert.equal(health.streaming && health.streaming.probeEndpoint, "/probe", "Daemon /health must expose /probe endpoint");
+    assert.equal(health.streaming && health.streaming.removeBgEndpoint, "/remove-bg", "Daemon /health must expose /remove-bg endpoint");
+    assert.equal(health.streaming && health.streaming.vaultPinEndpoint, "/vault/pin", "Daemon /health must expose /vault/pin endpoint");
+    const jobsListRes = await httpRequest(port, "/jobs");
+    assert.equal(jobsListRes.status, 200);
+    assert.equal(JSON.parse(jobsListRes.body.toString("utf8")).ok, true);
+    const gpuTelRes = await httpRequest(port, "/telemetry/gpu");
+    assert.equal(gpuTelRes.status, 200);
+    assert.equal(JSON.parse(gpuTelRes.body.toString("utf8")).ok, true);
+    const manifestRes = await httpRequest(port, "/manifest.json");
+    assert.equal(manifestRes.status, 200, "PWA manifest.json must be served cleanly");
     const cancelMissRes = await httpRequest(port, "/cancel/nonexistent_task", "POST");
     assert.equal(cancelMissRes.status, 200);
     const cancelMissJson = JSON.parse(cancelMissRes.body.toString("utf8"));
@@ -106,6 +164,25 @@ async function run() {
       assert.equal(renderJson.success, true);
       assert.ok(renderJson.sizeBytes > 1000, "Rendered MP4 must contain real video frames");
       if (renderJson.videoPath) createdArtifacts.push(renderJson.videoPath);
+
+      // Test POST /probe on disk artifact
+      const probeRes = await httpRequest(port, "/probe", "POST", { "X-Kaptura-Source-Export": renderJson.downloadUrl }, Buffer.alloc(0));
+      assert.equal(probeRes.status, 200);
+      const probeJson = JSON.parse(probeRes.body.toString("utf8"));
+      assert.equal(probeJson.ok, true);
+      assert.equal(probeJson.width, 320);
+      assert.ok(probeJson.estimates && probeJson.estimates["4k_cas"] >= 1);
+
+      // Test POST /vault/pin + DELETE /exports/vault/:name
+      const pinRes = await httpRequest(port, "/vault/pin", "POST", { "Content-Type": "application/json" }, JSON.stringify({ sourceUrl: renderJson.downloadUrl }));
+      assert.equal(pinRes.status, 200);
+      const pinJson = JSON.parse(pinRes.body.toString("utf8"));
+      assert.equal(pinJson.ok, true);
+      assert.ok(pinJson.downloadUrl && pinJson.downloadUrl.startsWith("/exports/vault/"));
+      const pinnedHead = await httpRequest(port, pinJson.downloadUrl, "HEAD");
+      assert.equal(pinnedHead.status, 200);
+      const unpinRes = await httpRequest(port, pinJson.downloadUrl, "DELETE");
+      assert.equal(unpinRes.status, 200);
 
       // Feed rendered MP4 into binary /transcode endpoint to test real re-encode pipeline
       const srcBuf = fs.readFileSync(renderJson.videoPath);
@@ -228,7 +305,9 @@ async function run() {
 
         // Regression test: native 4K video targeting 4K must short-circuit via GPU_ENHANCE_4K (never 8K blowup)
         const ffmpegBin = resolveFfmpegExecutable();
-        const src4k = path.join(os.tmpdir(), `kaptura_test_4k_${Date.now()}.mp4`);
+        const exportsTestDir = path.resolve(new URL("../exports", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+        fs.mkdirSync(exportsTestDir, { recursive: true });
+        const src4k = path.join(exportsTestDir, `.tmp_test_4k_${Date.now()}.mp4`);
         const mk4k = ffmpegBin
           ? spawnSync(
               ffmpegBin,
@@ -304,6 +383,63 @@ async function run() {
         assert.ok(Number(rifeOkRes.headers["x-kaptura-out-fps"]) >= 25, "RIFE 2x output FPS must double from ~15fps");
       }
 
+      // Test HEVC encode + 0.5s preview slicing if NVENC HEVC or libx265 is present
+      if (health.capabilities.encoders && (health.capabilities.encoders.nvencHevc || health.capabilities.encoders.libx265)) {
+        const hevcRes = await httpRequest(
+          port,
+          "/transcode?download=1",
+          "POST",
+          {
+            "Accept": "application/octet-stream",
+            "X-Kaptura-Ext": ".mp4",
+            "X-Kaptura-Container": "mp4",
+            "X-Kaptura-Codec": "hevc",
+            "X-Kaptura-Quality": "fast",
+            "X-Kaptura-Preview-Sec": "0.4",
+          },
+          srcBuf
+        );
+        assert.equal(hevcRes.status, 200, "HEVC transcode + preview slice must succeed");
+        assert.ok(String(hevcRes.headers["x-kaptura-codec"] || "").includes("hevc") || String(hevcRes.headers["x-kaptura-codec"] || "").includes("265"));
+      }
+
+      // Test BG Studio POST /remove-bg (image Chroma-Key PNG RGBA + video Chroma WebM Alpha)
+      const tinyGreenPng = makeTestPng(32, 32);
+      const bgImgRes = await httpRequest(
+        port,
+        "/remove-bg?download=1",
+        "POST",
+        {
+          "Accept": "application/octet-stream",
+          "X-Kaptura-Ext": ".png",
+          "X-Kaptura-Bg-Engine": "chroma",
+          "X-Kaptura-Bg-Backdrop": "transparent",
+          "X-Kaptura-Bg-Key-Color": "#00FF00",
+        },
+        tinyGreenPng
+      );
+      assert.equal(bgImgRes.status, 200, "POST /remove-bg Chroma image PNG RGBA must succeed");
+      assert.equal(bgImgRes.body.subarray(0, 4).toString("hex"), "89504e47");
+
+      const bgVidRes = await httpRequest(
+        port,
+        "/remove-bg",
+        "POST",
+        {
+          "X-Kaptura-Ext": ".mp4",
+          "X-Kaptura-Bg-Engine": "chroma",
+          "X-Kaptura-Bg-Backdrop": "transparent",
+          "X-Kaptura-Preview-Sec": "0.3",
+        },
+        srcBuf
+      );
+      assert.equal(bgVidRes.status, 200, "POST /remove-bg Chroma video WebM Alpha must succeed");
+      const bgVidJson = JSON.parse(bgVidRes.body.toString("utf8"));
+      assert.equal(bgVidJson.success, true);
+      assert.equal(bgVidJson.hasAlpha, true);
+      if (bgVidJson.videoPath) createdArtifacts.push(bgVidJson.videoPath);
+      if (bgVidJson.previewSourceFile) createdArtifacts.push(path.join(path.dirname(bgVidJson.videoPath), bgVidJson.previewSourceFile));
+
       // Test WebSocket /ws/capture streaming pipe-media mode
       if (typeof WebSocket === "function") {
         const wsResult = await new Promise((resolve, reject) => {
@@ -349,7 +485,7 @@ async function run() {
     const exportsDir = new URL("../exports", import.meta.url);
     if (fs.existsSync(exportsDir)) {
       for (const f of fs.readdirSync(exportsDir)) {
-        if (f.startsWith("transcode_") || f.startsWith("render_") || f.startsWith("trim_") || f.startsWith("capture_") || f.startsWith("up_") || f.startsWith("tx_") || f.startsWith(".tmp_up_") || f.startsWith(".tmp_upload_up_") || f.startsWith(".tmp_tx_") || f.startsWith(".tmp_upload_tx_")) {
+        if (f.startsWith("transcode_") || f.startsWith("render_") || f.startsWith("trim_") || f.startsWith("capture_") || f.startsWith("up_") || f.startsWith("tx_") || f.startsWith("bg_") || f.startsWith("preview_src_") || f.startsWith(".tmp_")) {
           try { fs.rmSync(new URL(`../exports/${f}`, import.meta.url), { recursive: true, force: true }); } catch {}
         }
       }

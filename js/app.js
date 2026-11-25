@@ -132,23 +132,49 @@
       : `🎬 MODO VÍDEO · ${detailText}`;
   }
 
+  function codecCapabilityLock(val) {
+    const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+    const enc = (dh && dh.encoders) || {};
+    if (val === 'hevc') {
+      if (!dh || !dh.online) return { locked: true, reason: 'DAEMON :3370' };
+      if (!enc.nvencHevc && !enc.libx265) return { locked: true, reason: 'NO DISPONIBLE' };
+    }
+    if (val === 'av1_mp4') {
+      if (!dh || !dh.online) return { locked: true, reason: 'DAEMON :3370' };
+      if (!enc.nvencAv1) return { locked: true, reason: 'REQUIERE RTX 40xx+' };
+    }
+    return { locked: false };
+  }
+
+  function applyConverterCodecLocks() {
+    syncSelectLocks($('convFormat'), (opt) => codecCapabilityLock(opt.value), 'mp4');
+  }
+
+  function daemonCodecParams(fmt) {
+    if (fmt === 'hevc') return { container: 'mp4', codec: 'hevc' };
+    if (fmt === 'av1_mp4') return { container: 'mp4', codec: 'av1' };
+    if (fmt === 'webm' || fmt === 'vp9') return { container: 'webm', codec: 'vp9' };
+    return { container: 'mp4', codec: 'h264' };
+  }
+
   function applyCompressorMediaMode(kind) {
     const fmtSel = $('compressorFormat');
     syncSelectLocks(fmtSel, (opt) => {
-      if (kind === 'image' && (opt.value === 'mp4' || opt.value === 'webm')) {
+      if (kind === 'image' && ['mp4', 'webm', 'hevc', 'av1_mp4'].includes(opt.value)) {
         return { locked: true, reason: 'SOLO VÍDEO' };
       }
       if (kind === 'video' && (opt.value === 'webp' || opt.value === 'jpeg')) {
         return { locked: true, reason: 'SOLO IMAGEN' };
       }
+      if (kind !== 'image') return codecCapabilityLock(opt.value);
       return { locked: false };
     }, 'auto');
     setMediaModeBadge(
       'compressorMediaBadge',
       kind,
       kind === 'image'
-        ? 'Formatos de imagen activos (WebP / JPEG); MP4 y WebM bloqueados'
-        : 'Formatos de vídeo activos (MP4 / WebM); WebP y JPEG bloqueados'
+        ? 'Formatos de imagen activos (WebP / JPEG); MP4, HEVC y WebM bloqueados'
+        : 'Formatos de vídeo activos (MP4 / HEVC / WebM); WebP y JPEG bloqueados'
     );
   }
 
@@ -189,6 +215,57 @@
     );
   }
 
+  function applyBgStudioMediaMode(kind) {
+    const isImg = kind === 'image';
+    const engSel = $('bgEngineSelect');
+    const bdSel = $('bgBackdropSelect');
+    if (window.KapturaBgRemover) {
+      syncSelectLocks(engSel, (opt) => {
+        if (!window.KapturaBgRemover.isEngineCompatible(opt.value, kind)) {
+          return { locked: true, reason: isImg ? 'SOLO VÍDEO' : 'SOLO IMAGEN' };
+        }
+        return { locked: false };
+      }, 'auto');
+      syncSelectLocks(bdSel, (opt) => {
+        if (!window.KapturaBgRemover.isBackdropCompatible(opt.value, kind)) {
+          return { locked: true, reason: isImg ? 'SOLO VÍDEO' : 'SOLO IMAGEN' };
+        }
+        return { locked: false };
+      }, 'transparent');
+    }
+    if ($('btnBgPreview2s')) {
+      $('btnBgPreview2s').textContent = isImg ? '👁️ PREVIEW EN INSPECTOR' : '👁️ PREVIEW 2s EN INSPECTOR';
+    }
+    setMediaModeBadge(
+      'bgMediaBadge',
+      kind,
+      isImg
+        ? 'BiRefNet 1024px / Chroma-Key PNG Alpha activos · RVM CUDA, ProRes y GreenScreen vídeo bloqueados'
+        : 'RVM RTX CUDA / ONNX / Chroma-Key + WebM VP9 & ProRes Alpha activos'
+    );
+  }
+
+  function updateGpuThermalUi(gpu) {
+    const el = $('statGpuThermal');
+    if (!el) return;
+    el.classList.remove('gpu-temp-cool', 'gpu-temp-warm', 'gpu-temp-hot');
+    if (!gpu || !gpu.available || gpu.tempC === null || gpu.tempC === undefined) {
+      el.style.color = 'var(--muted)';
+      el.textContent = '—';
+      return;
+    }
+    const shortName = String(gpu.name || 'GPU')
+      .replace(/^NVIDIA\s+GeForce\s+/i, '')
+      .replace(/\s+Laptop\s+GPU/i, '')
+      .trim();
+    const vramStr = gpu.vramUsedMB !== null && gpu.vramTotalMB
+      ? ` · ${(gpu.vramUsedMB / 1024).toFixed(1)}/${(gpu.vramTotalMB / 1024).toFixed(0)}GB`
+      : '';
+    const fire = gpu.tempC >= 86 ? ' 🔥' : '';
+    el.textContent = `${shortName} · ${gpu.tempC}°C${vramStr}${fire}`;
+    el.classList.add(gpu.tempC >= 86 ? 'gpu-temp-hot' : (gpu.tempC >= 78 ? 'gpu-temp-warm' : 'gpu-temp-cool'));
+  }
+
   /* ---- capability chips ------------------------------------------------- */
   (function renderCaps() {
     const row = $('capsRow');
@@ -209,6 +286,10 @@
         const statD = $('statDaemon');
         if (typeof updateUpskaletorReadiness === 'function') updateUpskaletorReadiness(dh);
         if (typeof updateUpskaletorProfileHint === 'function') updateUpskaletorProfileHint();
+        if (typeof updateBgReadiness === 'function') updateBgReadiness(dh);
+        applyConverterCodecLocks();
+        applyCompressorMediaMode(compFile ? detectMediaKind(compFile) : 'video');
+        if (typeof refreshVault === 'function') refreshVault();
         if (!el || !dh || !dh.online) return;
         const label = dh.hardwareAccelerated ? `NVENC :3370 (${dh.preferredCodec})` : (dh.ffmpegAvailable ? 'Daemon :3370' : 'Daemon :3370 (UI)');
         el.className = 'cap-chip on';
@@ -218,6 +299,9 @@
         }
         if (dh.rifeAvailable && !$('capRife')) {
           row.insertAdjacentHTML('beforeend', chip('RIFE v4.6 2×FPS', true, 'id="capRife"'));
+        }
+        if (dh.bgRemoval && (dh.bgRemoval.birefnet || dh.bgRemoval.rvmCuda || dh.bgRemoval.rvmOnnx) && !$('capBgMatte')) {
+          row.insertAdjacentHTML('beforeend', chip(dh.bgRemoval.rvmCuda ? 'BG Matte (BiRefNet+CUDA)' : 'BG Matte (ONNX)', true, 'id="capBgMatte"'));
         }
         if (gpuBtn && dh.ffmpegAvailable) gpuBtn.disabled = false;
         if ($('stageEncoderBadge')) {
@@ -230,6 +314,14 @@
           statD.style.color = 'var(--emerald)';
           statD.textContent = `${dh.hardwareAccelerated ? dh.preferredCodec.toUpperCase() : 'FFMPEG'} :3370${ebSuffix}`;
         }
+        updateGpuThermalUi(dh.gpu);
+        if (window.KapturaDaemon.fetchGpuTelemetry) {
+          setInterval(async () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+            const g = await window.KapturaDaemon.fetchGpuTelemetry();
+            if (g && g.ok) updateGpuThermalUi(g);
+          }, 5000);
+        }
       });
     }
   })();
@@ -237,6 +329,7 @@
   /* ---- Vault (data layer in js/vault.js; URLs owned here) ---------------- */
   const Vault = window.KapturaVault;
   let vaultUrls = [];
+  let vaultRefreshSeq = 0;
   function releaseVaultUrls() { vaultUrls.forEach(URL.revokeObjectURL); vaultUrls = []; }
 
   async function ensureRealFile(src) {
@@ -266,37 +359,109 @@
   }
 
   async function refreshVault() {
+    const seq = ++vaultRefreshSeq;
     let items = [];
     try { items = await Vault.getAll(); }
     catch (e) { toast(e.message, 'error'); }
+    if (seq !== vaultRefreshSeq) return;
     $('vault-count').textContent = items.length;
     const grid = $('vaultGrid');
     releaseVaultUrls();
+    const pruneBtn = $('btnPruneExpiredVault');
     if (!items.length) {
+      if (pruneBtn) pruneBtn.style.display = 'none';
       grid.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--dim); font-family:'Fira Code', monospace">
         No recordings saved in vault yet. Record a video to store it automatically!</div>`;
       return;
     }
+
+    const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+    const daemonOnline = Boolean(dh && dh.online);
+    const livenessMap = new Map();
+    const daemonBase = (window.KapturaDaemon && window.KapturaDaemon.DAEMON_BASE) || 'http://127.0.0.1:3370';
+    const isDaemonExportUrl = (u) => typeof u === 'string' && (u.startsWith(daemonBase) || u.includes('/exports/'));
+    let batchAlive = null;
+    if (daemonOnline && window.KapturaDaemon && typeof window.KapturaDaemon.checkUrlsAliveBatch === 'function') {
+      const daemonUrls = items.filter((it) => it.remoteUrl && isDaemonExportUrl(it.remoteUrl)).map((it) => it.remoteUrl);
+      if (daemonUrls.length) {
+        batchAlive = await window.KapturaDaemon.checkUrlsAliveBatch(daemonUrls);
+      }
+    }
+    await Promise.all(items.map(async (item) => {
+      if (!item.remoteUrl) { livenessMap.set(item.id, 'blob'); return; }
+      if (!daemonOnline && isDaemonExportUrl(item.remoteUrl)) { livenessMap.set(item.id, 'offline'); return; }
+      if (batchAlive && Object.prototype.hasOwnProperty.call(batchAlive, item.remoteUrl)) {
+        livenessMap.set(item.id, batchAlive[item.remoteUrl] ? 'alive' : 'expired');
+        return;
+      }
+      if (window.KapturaDaemon && typeof window.KapturaDaemon.checkUrlAlive === 'function') {
+        const alive = await window.KapturaDaemon.checkUrlAlive(item.remoteUrl);
+        livenessMap.set(item.id, alive ? 'alive' : 'expired');
+      } else {
+        livenessMap.set(item.id, 'alive');
+      }
+    }));
+    if (seq !== vaultRefreshSeq) return;
+
+    const expiredIds = items.filter((it) => livenessMap.get(it.id) === 'expired').map((it) => it.id);
+    if (pruneBtn) {
+      pruneBtn.style.display = expiredIds.length ? 'inline-flex' : 'none';
+      pruneBtn.textContent = `🧹 LIMPIAR EXPIRADOS (${expiredIds.length})`;
+      pruneBtn.onclick = async () => {
+        for (const id of expiredIds) {
+          try { await Vault.remove(id); } catch {}
+        }
+        await refreshVault();
+        toast(`Limpiados ${expiredIds.length} registros expirados del Vault.`, 'success');
+      };
+    }
+
     grid.innerHTML = items.map((item) => {
       const media = Vault.getRecordMediaSrc(item);
       if (item.blob instanceof Blob && media.src) vaultUrls.push(media.src);
       const isImg = item.type && item.type.startsWith('image/');
-      const thumbHtml = isImg
-        ? `<img class="vault-thumb" src="${media.src}" alt="${escapeHtml(item.name)}" style="object-fit:contain; background:#050811">`
-        : `<video class="vault-thumb" src="${media.src}" controls preload="metadata"></video>`;
-      const tag = item.remoteUrl ? 'DISK :3370' : 'INDEXEDDB';
+      const state = livenessMap.get(item.id) || (item.remoteUrl ? 'alive' : 'blob');
+      const isPinned = Boolean(item.pinned || (item.remoteUrl && item.remoteUrl.includes('/exports/vault/')));
+
+      let thumbHtml = '';
+      if (state === 'expired') {
+        thumbHtml = `<div class="vault-thumb-expired">
+          <div style="font-size:20px">⏳</div>
+          <div>Archivo temporal expirado en disco (GC 1h)</div>
+          <div style="opacity:0.78; font-size:10px">Usa 📌 FIJAR en futuros renders para conservarlos</div>
+        </div>`;
+      } else if (state === 'offline') {
+        thumbHtml = `<div class="vault-thumb-expired" style="border-color:rgba(0,240,255,0.3); color:var(--cyan)">
+          <div style="font-size:20px">🔌</div>
+          <div>Daemon :3370 desconectado</div>
+          <div style="opacity:0.78; font-size:10px">Inicia el daemon local para reproducir este archivo de disco</div>
+        </div>`;
+      } else if (isImg) {
+        thumbHtml = `<img class="vault-thumb" src="${media.src}" alt="${escapeHtml(item.name)}" style="object-fit:contain; background:#050811">`;
+      } else {
+        thumbHtml = `<video class="vault-thumb" src="${media.src}" controls preload="metadata"></video>`;
+      }
+
+      const tag = item.remoteUrl
+        ? (isPinned ? `<span class="vault-pin-badge">📌 FIJADO EN DISCO</span>` : 'DISK :3370 (TEMP)')
+        : 'INDEXEDDB';
+      const cardCls = `vault-card${isPinned ? ' is-pinned' : ''}${state === 'expired' ? ' is-expired' : ''}`;
+      const canStage = !isImg && (state === 'alive' || state === 'blob');
+      const canPin = Boolean(item.remoteUrl && !isPinned && state === 'alive' && daemonOnline);
       return `
-        <div class="vault-card">
+        <div class="${cardCls}">
           ${thumbHtml}
           <div class="vault-title">${escapeHtml(item.name)}</div>
           <div class="vault-info">📅 ${escapeHtml(item.timestamp)} · 💾 ${escapeHtml(item.size)} · ⏱️ ${escapeHtml(item.duration)} · ${tag}</div>
           <div class="vault-actions">
-            ${!isImg ? `<button class="vault-btn" data-stage="${item.id}">🎬 STAGE</button>` : ''}
-            <a class="vault-btn" href="${media.src}" download="${escapeHtml(item.name)}">💾 DOWNLOAD</a>
+            ${canStage ? `<button class="vault-btn" data-stage="${item.id}">🎬 STAGE</button>` : ''}
+            ${canPin ? `<button class="vault-btn pin" data-pin="${item.id}" title="Copiar a exports/vault/ (exento de limpieza automática)">📌 FIJAR</button>` : ''}
+            ${state === 'alive' || state === 'blob' ? `<a class="vault-btn" href="${media.src}" download="${escapeHtml(item.name)}">💾 DOWNLOAD</a>` : ''}
             <button class="vault-btn del" data-del="${item.id}">🗑️ DELETE</button>
           </div>
         </div>`;
     }).join('');
+
     grid.querySelectorAll('[data-stage]').forEach((b) => {
       b.addEventListener('click', () => {
         const item = items.find((x) => Number(x.id) === Number(b.dataset.stage));
@@ -315,10 +480,36 @@
         toast('Cargado en Stage para reproducción / trim.', 'notice');
       });
     });
+
+    grid.querySelectorAll('[data-pin]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const item = items.find((x) => Number(x.id) === Number(b.dataset.pin));
+        if (!item || !item.remoteUrl || !window.KapturaDaemon || !window.KapturaDaemon.pinExportViaDaemon) return;
+        b.disabled = true;
+        try {
+          const pinRes = await window.KapturaDaemon.pinExportViaDaemon(item.remoteUrl);
+          if (typeof Vault.update === 'function') {
+            await Vault.update(item.id, { remoteUrl: pinRes.remoteUrl, pinned: true });
+          }
+          await refreshVault();
+          toast(`📌 "${item.name}" fijado permanentemente en exports/vault/.`, 'success');
+        } catch (e) {
+          toast(e.message || String(e), 'error');
+        }
+      });
+    });
+
     grid.querySelectorAll('[data-del]').forEach((b) => {
       b.addEventListener('click', async () => {
-        try { await Vault.remove(Number(b.dataset.del)); await refreshVault(); }
-        catch (e) { toast(e.message, 'error'); }
+        const id = Number(b.dataset.del);
+        const item = items.find((x) => Number(x.id) === id);
+        try {
+          if (item && item.remoteUrl && item.remoteUrl.includes('/exports/vault/') && window.KapturaDaemon && window.KapturaDaemon.deletePinnedExportViaDaemon) {
+            await window.KapturaDaemon.deletePinnedExportViaDaemon(item.remoteUrl);
+          }
+          await Vault.remove(id);
+          await refreshVault();
+        } catch (e) { toast(e.message, 'error'); }
       });
     });
   }
@@ -343,8 +534,19 @@
 
   $('btnClearVault').addEventListener('click', async () => {
     if (!confirm('Clear all recorded videos from the local vault?')) return;
-    try { await Vault.clear(); await refreshVault(); toast('Vault cleared.', 'success'); }
-    catch (e) { toast(e.message, 'error'); }
+    try {
+      const items = await Vault.getAll();
+      if (window.KapturaDaemon && window.KapturaDaemon.deletePinnedExportViaDaemon) {
+        for (const it of items) {
+          if (it && it.remoteUrl && it.remoteUrl.includes('/exports/vault/')) {
+            await window.KapturaDaemon.deletePinnedExportViaDaemon(it.remoteUrl);
+          }
+        }
+      }
+      await Vault.clear();
+      await refreshVault();
+      toast('Vault cleared.', 'success');
+    } catch (e) { toast(e.message, 'error'); }
   });
 
   function activateTab(tabId) {
@@ -730,6 +932,23 @@
     });
   }
 
+  async function runPreflightFor(fileOrSrc, stripId, profileKey, onMeta) {
+    const el = $(stripId);
+    if (!el || !window.KapturaPreflight || !fileOrSrc) return null;
+    const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+    const local = await window.KapturaPreflight.probeLocalFile(fileOrSrc);
+    if (local) {
+      window.KapturaPreflight.renderDiagnosticStrip(el, local, profileKey, dh);
+      if (typeof onMeta === 'function') onMeta(local);
+    }
+    const full = await window.KapturaPreflight.probeMedia(fileOrSrc, dh);
+    if (full) {
+      window.KapturaPreflight.renderDiagnosticStrip(el, full, profileKey, dh);
+      if (typeof onMeta === 'function') onMeta(full);
+    }
+    return full || local;
+  }
+
   function handoffStageToTab(targetTab, setter) {
     if (!lastMaster) { toast('Graba o abre un vídeo en Stage primero.', 'error'); return; }
     setter({ ...lastMaster });
@@ -749,6 +968,7 @@
       $('compressorDzSub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Vídeo listo desde Stage`;
       applyCompressorMediaMode('video');
       refreshCompressorEstimate(m);
+      runPreflightFor(m, 'compressorPreflight', '4k_cas');
     }));
   }
   if ($('btnSendToConverter')) {
@@ -756,6 +976,7 @@
       convFile = m;
       $('dropzone').querySelector('.dz-title').textContent = `STAGE MASTER: ${m.name}`;
       $('dropzone').querySelector('.dz-sub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Range ${m.trimStart.toFixed(1)}s–${m.trimEnd.toFixed(1)}s`;
+      runPreflightFor(m, 'converterPreflight', '4k_cas');
     }));
   }
   if ($('btnSendToUpskaletor')) {
@@ -764,6 +985,18 @@
       $('upskaletorDzTitle').textContent = `STAGE MASTER: ${m.name}`;
       $('upskaletorDzSub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Listo desde Stage`;
       applyUpskaletorMediaMode('video');
+      if ($('btnUpscalePreview2s')) $('btnUpscalePreview2s').textContent = '👁️ PREVIEW 2s EN INSPECTOR';
+      runPreflightFor(m, 'upskaletorPreflight', $('upskaletorProfileSelect') ? $('upskaletorProfileSelect').value : '4k_ai', (meta) => { upMediaMeta = meta; });
+    }));
+  }
+  if ($('btnSendToBgRemove')) {
+    $('btnSendToBgRemove').addEventListener('click', () => handoffStageToTab('tab-bgremove', (m) => {
+      bgFile = m;
+      bgMediaMeta = null;
+      $('bgDzTitle').textContent = `STAGE MASTER: ${m.name}`;
+      $('bgDzSub').textContent = `${(m.sizeBytes / (1024 * 1024)).toFixed(2)} MB · Listo para quitar fondo`;
+      applyBgStudioMediaMode('video');
+      runPreflightFor(m, 'bgPreflight', 'bg_remove', (meta) => { bgMediaMeta = meta; });
     }));
   }
 
@@ -795,6 +1028,7 @@
         readout.textContent = useDaemon
           ? `Re-encode GPU :3370 a ${fmt.toUpperCase()}…`
           : `Re-encode real a ${fmt.toUpperCase()}…`;
+        const cp = daemonCodecParams(fmt);
         let r;
         if (useDaemon) {
           try {
@@ -802,20 +1036,20 @@
               ? { remoteUrl: lastMaster.remoteUrl, name: lastMaster.name }
               : await ensureRealFile(lastMaster);
             r = await window.KapturaDaemon.transcodeViaDaemon(daemonSrc, {
-              container: fmt, quality: 'fast', ...trimOpts,
+              container: cp.container, codec: cp.codec, quality: 'fast', ...trimOpts,
               onProgress: (p, m) => { readout.textContent = `GPU :3370 ${fmt.toUpperCase()}: ${Math.round(p * 100)}%${m && m.speed ? ' · ' + m.speed : ''}`; },
             });
           } catch {
             const f = await ensureRealFile(lastMaster);
             r = await window.KapturaTranscoder.transcode(f, {
-              caps, container: fmt, quality: 'fast', ...trimOpts,
+              caps, container: cp.container, quality: 'fast', ...trimOpts,
               onProgress: (p) => { readout.textContent = `${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
             });
           }
         } else {
           const f = await ensureRealFile(lastMaster);
           r = await window.KapturaTranscoder.transcode(f, {
-            caps, container: fmt, quality: 'fast', ...trimOpts,
+            caps, container: cp.container, quality: 'fast', ...trimOpts,
             onProgress: (p) => { readout.textContent = `${fmt.toUpperCase()}: ${Math.round(p * 100)}%`; },
           });
         }
@@ -830,14 +1064,18 @@
 
   /* ---- V-Converter (real transcode) ------------------------------------- */
   let convFile = null;
-  wireDropzone('dropzone', 'fileInput', (f) => {
+  wireDropzone('dropzone', 'fileInput', (f, allFiles) => {
     if (detectMediaKind(f) === 'image') {
-      toast('Esta pestaña solo procesa vídeos (.mp4 / .webm). Para imágenes usa Compresor, SVG Vector o UPSKALETOR.', 'error');
+      toast('Esta pestaña solo procesa vídeos (.mp4 / .webm). Para imágenes usa Compresor, SVG Vector, BG Studio o UPSKALETOR.', 'error');
       return;
     }
     convFile = f;
     $('dropzone').querySelector('.dz-title').textContent = `SELECTED: ${f.name}`;
     $('dropzone').querySelector('.dz-sub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${f.type || 'video'}`;
+    runPreflightFor(f, 'converterPreflight', '4k_cas');
+    if (allFiles && allFiles.length > 1) {
+      enqueueBatchFiles('converter', allFiles.filter((x) => detectMediaKind(x) === 'video'));
+    }
   });
 
   $('btnConvertNow').addEventListener('click', async () => {
@@ -867,6 +1105,7 @@
         status.textContent = useDaemon
           ? `Transcodificando por GPU Daemon :3370 (${fmt.toUpperCase()})…`
           : `Transcodificando a ${fmt.toUpperCase()} (real)…`;
+        const cp = daemonCodecParams(fmt);
         let r;
         if (useDaemon) {
           try {
@@ -874,20 +1113,20 @@
               ? { remoteUrl: activeSrc.remoteUrl, name: activeSrc.name }
               : await ensureRealFile(activeSrc);
             r = await window.KapturaDaemon.transcodeViaDaemon(daemonSrc, {
-              container: fmt, quality, ...dims, ...trimOpts,
-              onProgress: (p, m) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `GPU :3370 ${Math.round(p * 100)}%${m && m.speed ? ' · ' + m.speed : ''}`; },
+              container: cp.container, codec: cp.codec, quality, ...dims, ...trimOpts,
+              onProgress: (p, m) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `GPU :3370 ${fmt.toUpperCase()} ${Math.round(p * 100)}%${m && m.speed ? ' · ' + m.speed : ''}`; },
             });
           } catch {
             const f = await ensureRealFile(activeSrc);
             r = await window.KapturaTranscoder.transcode(f, {
-              caps, container: fmt, quality, ...dims, ...trimOpts,
+              caps, container: cp.container, quality, ...dims, ...trimOpts,
               onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
             });
           }
         } else {
           const f = await ensureRealFile(activeSrc);
           r = await window.KapturaTranscoder.transcode(f, {
-            caps, container: fmt, quality, ...dims, ...trimOpts,
+            caps, container: cp.container, quality, ...dims, ...trimOpts,
             onProgress: (p) => { setProgress('progressBarBg', 'progressBarFill', p); status.textContent = `${fmt.toUpperCase()} ${Math.round(p * 100)}%`; },
           });
         }
@@ -921,13 +1160,17 @@
   $('compressorBudget').addEventListener('change', () => refreshCompressorEstimate());
   $('compressorFormat').addEventListener('change', () => refreshCompressorEstimate());
 
-  wireDropzone('compressorDropzone', 'compressorFileInput', (f) => {
+  wireDropzone('compressorDropzone', 'compressorFileInput', (f, allFiles) => {
     compFile = f;
     const kind = detectMediaKind(f);
     $('compressorDzTitle').textContent = `SELECTED: ${f.name}`;
     $('compressorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen' : 'Vídeo'} original`;
     applyCompressorMediaMode(kind);
     refreshCompressorEstimate(f);
+    runPreflightFor(f, 'compressorPreflight', '4k_cas');
+    if (allFiles && allFiles.length > 1) {
+      enqueueBatchFiles('compressor', allFiles);
+    }
   });
 
   $('btnCompressNow').addEventListener('click', async () => {
@@ -966,12 +1209,14 @@
           : 'Comprimiendo vídeo adaptativamente a target budget…';
         if (useDaemon) {
           try {
+            const cp = daemonCodecParams(fmt === 'auto' ? 'mp4' : fmt);
             const daemonSrc = activeSrc.remoteUrl
               ? { remoteUrl: activeSrc.remoteUrl, name: srcName }
               : await ensureRealFile(activeSrc);
             const dr = await window.KapturaDaemon.transcodeViaDaemon(daemonSrc, {
               targetMB,
-              container: fmt === 'auto' ? 'mp4' : fmt,
+              container: cp.container,
+              codec: cp.codec,
               quality,
               onProgress: (p, m) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `GPU :3370 ${Math.round(p * 100)}%${m && m.speed ? ' · ' + m.speed : ''}…`; },
             });
@@ -988,7 +1233,7 @@
             const fileObj = await ensureRealFile(activeSrc);
             r = await window.KapturaCompressor.compressVideo(fileObj, {
               targetMB,
-              container: fmt === 'auto' ? 'mp4' : fmt,
+              container: fmt === 'hevc' || fmt === 'av1_mp4' || fmt === 'auto' ? 'mp4' : fmt,
               quality,
               caps,
               onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
@@ -998,7 +1243,7 @@
           const fileObj = await ensureRealFile(activeSrc);
           r = await window.KapturaCompressor.compressVideo(fileObj, {
             targetMB,
-            container: fmt === 'auto' ? 'mp4' : fmt,
+            container: fmt === 'hevc' || fmt === 'av1_mp4' || fmt === 'auto' ? 'mp4' : fmt,
             quality,
             caps,
             onProgress: (p) => { setProgress('compressorProgressBarBg', 'compressorProgressBarFill', p); status.textContent = `Comprimiendo ${Math.round(p * 100)}%…`; },
@@ -1041,7 +1286,7 @@
   });
 
   /* ---- UPSKALETOR (real Lanczos + A/B Comparator + honest AI handoff) ---- */
-  let upFile = null, upBeforeRevoke = null, upAfterRevoke = null, upResultBlob = null;
+  let upFile = null, upMediaMeta = null, upBeforeRevoke = null, upAfterRevoke = null, upResultBlob = null;
   function setUpscaleDownloadReady(enabled, fileName, text, onClickFn) {
     [$('btnDownloadUpscaled'), $('btnDownloadUpscaledTab')].forEach((el) => {
       if (!el) return;
@@ -1166,6 +1411,10 @@
     $('upskaletorProfileSelect').addEventListener('change', (e) => {
       if (e && e.isTrusted) userPickedUpscaleProfile = true;
       updateUpskaletorProfileHint();
+      if (upMediaMeta && window.KapturaPreflight && $('upskaletorPreflight')) {
+        const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+        window.KapturaPreflight.renderDiagnosticStrip($('upskaletorPreflight'), upMediaMeta, $('upskaletorProfileSelect').value, dh);
+      }
     });
   }
 
@@ -1199,12 +1448,20 @@
     });
   }
 
-  wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f) => {
+  wireDropzone('upskaletorDropzone', 'upskaletorFileInput', (f, allFiles) => {
     upFile = f;
+    upMediaMeta = null;
     const kind = detectMediaKind(f);
     $('upskaletorDzTitle').textContent = `SELECTED: ${f.name}`;
     $('upskaletorDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen' : (f.type || 'video')}`;
+    if ($('btnUpscalePreview2s')) {
+      $('btnUpscalePreview2s').textContent = kind === 'image' ? '👁️ PREVIEW EN INSPECTOR' : '👁️ PREVIEW 2s EN INSPECTOR';
+    }
     applyUpskaletorMediaMode(kind);
+    runPreflightFor(f, 'upskaletorPreflight', $('upskaletorProfileSelect') ? $('upskaletorProfileSelect').value : '4k_ai', (meta) => { upMediaMeta = meta; });
+    if (allFiles && allFiles.length > 1) {
+      enqueueBatchFiles('upskaletor', allFiles);
+    }
   });
 
   let activeUpscaleCtrl = null;
@@ -1222,7 +1479,7 @@
     });
   }
 
-  $('btnUpscaleNow').addEventListener('click', async () => {
+  async function executeUpskaletor({ previewOnly = false } = {}) {
     const activeSrc = upFile || lastMaster;
     if (!activeSrc) { toast('Arrastra un vídeo o imagen primero.', 'error'); return; }
     const profile = $('upskaletorProfileSelect').value;
@@ -1232,6 +1489,7 @@
     activeUpscaleTaskId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     activeUpscaleCtrl = typeof AbortController === 'function' ? new AbortController() : null;
     $('btnUpscaleNow').disabled = true;
+    if ($('btnUpscalePreview2s')) $('btnUpscalePreview2s').disabled = true;
     if (cancelBtn) cancelBtn.style.display = 'inline-flex';
     setUpscaleDownloadReady(false, 'kaptura_upscaled', '⬇ DESCARGAR UPSKALED', null);
     if ($('upskaletorResult')) $('upskaletorResult').style.display = 'none';
@@ -1255,6 +1513,10 @@
         ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
         : await ensureRealFile(activeSrc);
 
+      const isImgInput = detectMediaKind(fileObj) === 'image';
+      const durHint = (upMediaMeta && upMediaMeta.duration) || activeSrc.duration || 0;
+      const previewStartSec = previewOnly && !isImgInput && durHint > 6 ? Number((durHint * 0.15).toFixed(2)) : 0;
+
       const formatEta = (sec) => {
         if (sec === null || sec === undefined || !Number.isFinite(Number(sec))) return '';
         const s = Math.max(0, Math.round(Number(sec)));
@@ -1266,6 +1528,8 @@
       const result = await window.KapturaUpskaletor.run(fileObj, profile, engine, {
         caps,
         sharpen: sharpenVal,
+        previewSec: previewOnly && !isImgInput ? 2.0 : 0,
+        previewStartSec,
         taskId: activeUpscaleTaskId,
         signal: activeUpscaleCtrl ? activeUpscaleCtrl.signal : undefined,
         onProgress: (p, m) => {
@@ -1277,14 +1541,14 @@
           const spfTag = m && m.secPerFrame ? ` · ${m.secPerFrame}s/f` : '';
           const speedTag = m && m.speed ? ` · ${m.speed}` : '';
           const etaTag = m ? formatEta(m.etaSec) : '';
-          status.textContent = `Procesando ${Math.round(p * 100)}%${stageTag}${modelTag}${segTag}${frameTag}${spfTag}${speedTag}${etaTag}…`;
+          const pPrefix = previewOnly ? 'Preview 2s ' : 'Procesando ';
+          status.textContent = `${pPrefix}${Math.round(p * 100)}%${stageTag}${modelTag}${segTag}${frameTag}${spfTag}${speedTag}${etaTag}…`;
         },
       });
       if (result.mode === 'handoff') {
-        // Honest: do NOT fake AI. Hand off the untouched master + real command.
         upResultBlob = fileObj;
         try { await navigator.clipboard.writeText(result.command); } catch { /* clipboard optional */ }
-        downloadBlob(fileObj, fileObj.name);
+        if (!previewOnly) downloadBlob(fileObj, fileObj.name);
         setUpscaleDownloadReady(
           true,
           fileObj.name,
@@ -1296,7 +1560,8 @@
       } else {
         const resTag = result.width && result.height ? `${result.width}x${result.height}` : (result.pipeline === 'rife' ? 'RIFE_2xFPS' : 'HD');
         const labelTag = result.width && result.height ? `${result.width}×${result.height}` : (result.pipeline === 'rife' ? '2× FPS' : '');
-        const name = `${baseName(fileObj.name)}_UPSKALED_${resTag}.${result.ext}`;
+        const suffixTag = previewOnly ? '_PREVIEW2S' : '_UPSKALED';
+        const name = `${baseName(fileObj.name)}${suffixTag}_${resTag}.${result.ext}`;
         upResultBlob = result.blob || null;
         const outTarget = result.blob || result.remoteUrl;
         const outSizeBytes = (result.blob && result.blob.size) || result.sizeBytes || 0;
@@ -1312,11 +1577,12 @@
           ? ` · FPS: ${it.srcFps}→${it.outFps} · Drift: ${it.durationDriftMs ?? 0}ms${it.audioPreserved ? ' · Audio OK' : ''}`
           : '';
         if ($('upskaletorReadout')) {
-          $('upskaletorReadout').textContent = `ARCHIVO LISTO: ${name} · ${sizeMB} MB · Motor: ${result.scaleMode}${itText}`;
+          const prefix = previewOnly ? '👁️ PREVIEW FORENSE 2s (muestra previa al render completo) · ' : '';
+          $('upskaletorReadout').textContent = `${prefix}ARCHIVO LISTO: ${name} · ${sizeMB} MB · Motor: ${result.scaleMode}${itText}`;
         }
         if ($('upskaletorResult')) $('upskaletorResult').style.display = 'block';
         if (window.KapturaComparator && $('upskaletorCompareBox')) {
-          const bSrc = mediaPreviewSrc(activeSrc);
+          const bSrc = result.previewSourceUrl ? { url: result.previewSourceUrl, revoke: () => {} } : mediaPreviewSrc(activeSrc);
           const aSrc = mediaPreviewSrc(result.blob || result);
           upBeforeRevoke = bSrc.revoke;
           upAfterRevoke = aSrc.revoke;
@@ -1324,20 +1590,29 @@
             beforeSrc: bSrc.url,
             afterSrc: aSrc.url,
             isVideo: !result.isImage,
-            beforeLabel: 'ORIGINAL',
-            afterLabel: result.pipeline === 'rife' ? 'RIFE 2× FPS' : 'UPSKALED',
+            beforeLabel: previewOnly && !result.isImage ? 'ORIGINAL (2s)' : 'ORIGINAL',
+            afterLabel: result.pipeline === 'rife' ? 'RIFE 2× FPS' : (previewOnly && !result.isImage ? 'PREVIEW 2s' : 'UPSKALED'),
             integrity: result.integrity || null,
             engineLabel: result.scaleMode || '',
             isRife: result.pipeline === 'rife' || result.pipeline === 'hybrid',
           });
         }
-        const autoDl = !skipNextAutoDownload;
+        const autoDl = !skipNextAutoDownload && !previewOnly;
         skipNextAutoDownload = false;
         if (autoDl) downloadBlob(outTarget, name);
-        await saveToVault({ blob: result.blob || null, remoteUrl: result.remoteUrl || null, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: outSizeBytes });
+        if (!previewOnly) {
+          await saveToVault({ blob: result.blob || null, remoteUrl: result.remoteUrl || null, name, mime: (result.isImage ? 'image/' : 'video/') + result.ext, durationSec: 'N/A', sizeBytes: outSizeBytes });
+        }
         if (result.fellBack) toast('MP4 no disponible; guardado WebM real.', 'notice');
-        status.textContent = `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;
-        toast(`Proceso real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`, 'success');
+        status.textContent = previewOnly
+          ? `👁️ Preview forense listo (${labelTag || resTag}). Pulsa 🚀 START UPSKALETOR para exportar el archivo completo.`
+          : `✅ Proceso real ${labelTag || resTag} (${result.scaleMode}).`;
+        toast(
+          previewOnly
+            ? 'Preview forense abierto en Inspector A/B. Usa 4×/8× o Δ×8 Heatmap para auditar detalle.'
+            : `Proceso real ${result.isImage ? 'de imagen' : 'de vídeo'} completado y guardado en la Bóveda.`,
+          'success'
+        );
       }
     } catch (e) {
       if (e && e.name === 'AbortError') {
@@ -1352,10 +1627,16 @@
       activeUpscaleCtrl = null;
       activeUpscaleTaskId = '';
       $('btnUpscaleNow').disabled = false;
+      if ($('btnUpscalePreview2s')) $('btnUpscalePreview2s').disabled = false;
       if ($('btnCancelUpscale')) $('btnCancelUpscale').style.display = 'none';
       setTimeout(() => setProgress('upskaletorProgressBarBg', 'upskaletorProgressBarFill', 0), 800);
     }
-  });
+  }
+
+  $('btnUpscaleNow').addEventListener('click', () => executeUpskaletor({ previewOnly: false }));
+  if ($('btnUpscalePreview2s')) {
+    $('btnUpscalePreview2s').addEventListener('click', () => executeUpskaletor({ previewOnly: true }));
+  }
 
   $('btnCopyCmd').addEventListener('click', async () => {
     const file = upFile || (lastMaster && { name: lastMaster.name }) || { name: 'kaptura_master.mp4' };
@@ -1475,7 +1756,7 @@
       window.KapturaLiquidShader.triggerWaterDrop(x, y, strength, zone);
     }
   }
-  function wireDropzone(zoneId, inputId, onFile) {
+  function wireDropzone(zoneId, inputId, onFiles) {
     const zone = $(zoneId), input = $(inputId);
     let lastClick = null;
     zone.addEventListener('click', (e) => {
@@ -1486,13 +1767,14 @@
       input.click();
     });
     input.addEventListener('change', (e) => {
-      const f = e.target.files[0];
-      if (!f) return;
+      const files = e.target.files ? Array.from(e.target.files) : [];
+      if (!files.length) return;
       const rect = zone.getBoundingClientRect();
       const x = lastClick ? lastClick.x : (rect.left + rect.width * 0.5);
       const y = lastClick ? lastClick.y : (rect.top + rect.height * 0.5);
       triggerDropSplash(x, y, zone, 0.92);
-      onFile(f);
+      onFiles(files[0], files);
+      try { input.value = ''; } catch {}
     });
     zone.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -1508,16 +1790,362 @@
     zone.addEventListener('drop', (e) => {
       e.preventDefault();
       zone.classList.remove('dragover');
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!f) return;
+      const files = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+      if (!files.length) return;
       const rect = zone.getBoundingClientRect();
       const dropX = Number.isFinite(e.clientX) && e.clientX > 0 ? e.clientX : (rect.left + rect.width * 0.5);
       const dropY = Number.isFinite(e.clientY) && e.clientY > 0 ? e.clientY : (rect.top + rect.height * 0.5);
       triggerDropSplash(dropX, dropY, zone, 1.0);
-      onFile(f);
+      onFiles(files[0], files);
     });
   }
   function baseName(n) { const i = n.lastIndexOf('.'); return i > 0 ? n.substring(0, i) : n; }
+
+  /* ---- BG STUDIO PREMIUM (Images & Videos Matte / Chroma / Alpha) ------ */
+  let bgFile = null, bgMediaMeta = null, bgCustomFile = null;
+  let bgBeforeRevoke = null, bgAfterRevoke = null, activeBgCtrl = null, activeBgTaskId = '';
+
+  function updateBgReadiness(dh) {
+    const bar = $('bgReadinessBar');
+    if (!bar) return;
+    const h = dh || (window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {});
+    const bgr = (h && h.bgRemoval) || {};
+    const items = [
+      { label: 'BiRefNet 1024px', on: Boolean(h && h.online && bgr.birefnet) },
+      { label: 'RVM ResNet50 RTX CUDA', on: Boolean(h && h.online && bgr.rvmCuda) },
+      { label: 'RVM Fast Neural', on: Boolean(h && h.online && bgr.rvmOnnx) },
+      { label: 'Chroma-Key + WebM/PNG Alpha', on: true },
+    ];
+    bar.innerHTML = items.map((i) => `<span class="readiness-pill ${i.on ? 'on' : 'off'}">${i.on ? '●' : '○'} ${i.label}</span>`).join('');
+  }
+
+  function syncBgContextualControls() {
+    const bd = $('bgBackdropSelect') ? $('bgBackdropSelect').value : 'transparent';
+    const eng = $('bgEngineSelect') ? $('bgEngineSelect').value : 'auto';
+    const showSolid = bd === 'solid';
+    const showBlur = bd === 'bokeh';
+    const showImg = bd === 'custom_image';
+    const showChroma = eng === 'chroma';
+    if ($('bgSolidColorWrap')) $('bgSolidColorWrap').style.display = showSolid ? 'flex' : 'none';
+    if ($('bgBlurWrap')) $('bgBlurWrap').style.display = showBlur ? 'flex' : 'none';
+    if ($('bgCustomImgWrap')) $('bgCustomImgWrap').style.display = showImg ? 'flex' : 'none';
+    if ($('bgChromaWrap')) $('bgChromaWrap').style.display = showChroma ? 'flex' : 'none';
+    if ($('bgContextOptions')) {
+      $('bgContextOptions').style.display = (showSolid || showBlur || showImg || showChroma) ? 'flex' : 'none';
+    }
+  }
+
+  if ($('bgBackdropSelect')) $('bgBackdropSelect').addEventListener('change', syncBgContextualControls);
+  if ($('bgEngineSelect')) $('bgEngineSelect').addEventListener('change', syncBgContextualControls);
+  if ($('bgBlurRange') && $('bgBlurVal')) {
+    $('bgBlurRange').addEventListener('input', () => { $('bgBlurVal').textContent = $('bgBlurRange').value; });
+  }
+  if ($('btnPickBgCustomImg') && $('bgCustomImgInput')) {
+    $('btnPickBgCustomImg').addEventListener('click', () => $('bgCustomImgInput').click());
+    $('bgCustomImgInput').addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      bgCustomFile = f;
+      if ($('bgCustomImgName')) $('bgCustomImgName').textContent = f.name;
+    });
+  }
+
+  if ($('bgDropzone') && $('bgFileInput')) {
+    wireDropzone('bgDropzone', 'bgFileInput', (f, allFiles) => {
+      bgFile = f;
+      bgMediaMeta = null;
+      const kind = detectMediaKind(f);
+      $('bgDzTitle').textContent = `SELECTED: ${f.name}`;
+      $('bgDzSub').textContent = `${(f.size / (1024 * 1024)).toFixed(2)} MB · ${kind === 'image' ? 'Imagen' : (f.type || 'video')}`;
+      applyBgStudioMediaMode(kind);
+      runPreflightFor(f, 'bgPreflight', 'bg_remove', (meta) => { bgMediaMeta = meta; });
+      if (allFiles && allFiles.length > 1) {
+        enqueueBatchFiles('bgremove', allFiles);
+      }
+    });
+  }
+
+  if ($('btnCancelBg')) {
+    $('btnCancelBg').addEventListener('click', () => {
+      if (activeBgCtrl) try { activeBgCtrl.abort(); } catch {}
+      if (activeBgTaskId && window.KapturaDaemon && window.KapturaDaemon.cancelTaskViaDaemon) {
+        window.KapturaDaemon.cancelTaskViaDaemon(activeBgTaskId);
+      }
+      if ($('bgStatus')) $('bgStatus').textContent = '✕ Cancelando BG Studio…';
+    });
+  }
+
+  async function executeBgRemove({ previewOnly = false } = {}) {
+    if (!window.KapturaBgRemover) return;
+    const activeSrc = bgFile || lastMaster;
+    if (!activeSrc) { toast('Arrastra una imagen o vídeo en BG Studio primero.', 'error'); return; }
+    const engine = $('bgEngineSelect') ? $('bgEngineSelect').value : 'auto';
+    const backdrop = $('bgBackdropSelect') ? $('bgBackdropSelect').value : 'transparent';
+    const edgeRefine = $('bgEdgeSelect') ? Number($('bgEdgeSelect').value) : 0;
+    const decontaminate = $('bgDecontaminateSelect') ? $('bgDecontaminateSelect').value !== '0' : true;
+    const bgColor = $('bgSolidColor') ? $('bgSolidColor').value : '#050814';
+    const blurStrength = $('bgBlurRange') ? Number($('bgBlurRange').value) : 23;
+    const keyColor = $('bgChromaColor') ? $('bgChromaColor').value : '#00FF00';
+    const similarity = $('bgChromaSim') ? Number($('bgChromaSim').value) : 0.20;
+    const blend = $('bgChromaBlend') ? Number($('bgChromaBlend').value) : 0.08;
+
+    if (backdrop === 'custom_image' && !bgCustomFile) {
+      toast('Elige primero una imagen de fondo en 🖼️ ELEGIR IMAGEN DE FONDO.', 'error');
+      return;
+    }
+
+    const status = $('bgStatus');
+    const dlBtn = $('btnDownloadBgRemoved');
+    activeBgTaskId = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    activeBgCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+    if ($('btnBgRemoveNow')) $('btnBgRemoveNow').disabled = true;
+    if ($('btnBgPreview2s')) $('btnBgPreview2s').disabled = true;
+    if ($('btnCancelBg')) $('btnCancelBg').style.display = 'inline-flex';
+    if (dlBtn) {
+      dlBtn.classList.add('is-disabled');
+      dlBtn.setAttribute('aria-disabled', 'true');
+      dlBtn.onclick = null;
+    }
+    if ($('bgResult')) $('bgResult').style.display = 'none';
+    if (bgBeforeRevoke) { bgBeforeRevoke(); bgBeforeRevoke = null; }
+    if (bgAfterRevoke) { bgAfterRevoke(); bgAfterRevoke = null; }
+    if ($('bgCompareBox')) $('bgCompareBox').style.display = 'none';
+
+    try {
+      const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
+      const bgCaps = (dh && dh.bgRemoval) || {};
+      const hasAnyNeural = Boolean(bgCaps.birefnet || bgCaps.rvmCuda || bgCaps.rvmOnnx);
+      const canPassRemote = Boolean(
+        activeSrc.remoteUrl &&
+        window.KapturaDaemon &&
+        window.KapturaDaemon.isReadyForTranscode() &&
+        (engine === 'chroma' || hasAnyNeural)
+      );
+      const fileObj = canPassRemote
+        ? { name: activeSrc.name, type: activeSrc.mime || 'video/mp4', size: activeSrc.sizeBytes || 0, remoteUrl: activeSrc.remoteUrl }
+        : await ensureRealFile(activeSrc);
+
+      const isImgInput = detectMediaKind(fileObj) === 'image';
+      const durHint = (bgMediaMeta && bgMediaMeta.duration) || activeSrc.duration || 0;
+      const previewStartSec = previewOnly && !isImgInput && durHint > 6 ? Number((durHint * 0.15).toFixed(2)) : 0;
+
+      const result = await window.KapturaBgRemover.run(fileObj, {
+        engine,
+        backdrop,
+        bgColor,
+        blurStrength,
+        customBgFile: bgCustomFile,
+        edgeRefine,
+        decontaminate,
+        keyColor,
+        similarity,
+        blend,
+        previewSec: previewOnly && !isImgInput ? 2.0 : 0,
+        previewStartSec,
+        taskId: activeBgTaskId,
+        signal: activeBgCtrl ? activeBgCtrl.signal : undefined,
+        onProgress: (p, m) => {
+          setProgress('bgProgressBarBg', 'bgProgressBarFill', p);
+          const stageTag = m && m.stage ? ` · ${m.stage}` : '';
+          const frameTag = m && m.frame ? ` · f${m.frame}${m.totalFrames ? '/' + m.totalFrames : ''}` : '';
+          const spfTag = m && m.secPerFrame ? ` · ${m.secPerFrame}s/f` : '';
+          const etaTag = m && m.etaSec !== undefined ? ` · ETA ${m.etaSec}s` : '';
+          status.textContent = `${previewOnly ? 'Preview 2s ' : 'BG Studio '}${Math.round(p * 100)}%${stageTag}${frameTag}${spfTag}${etaTag}…`;
+        },
+      });
+
+      const outTarget = result.blob || result.remoteUrl;
+      const outBytes = (result.blob && result.blob.size) || result.sizeBytes || 0;
+      const sizeMB = (outBytes / (1024 * 1024)).toFixed(2);
+      const outName = `${baseName(fileObj.name)}${previewOnly ? '_BG_PREVIEW' : '_NOBG'}_${backdrop}.${result.ext}`;
+      if (dlBtn) {
+        dlBtn.classList.remove('is-disabled');
+        dlBtn.setAttribute('aria-disabled', 'false');
+        dlBtn.download = outName;
+        dlBtn.textContent = `⬇ DESCARGAR ${result.ext.toUpperCase()} (${sizeMB} MB)`;
+        dlBtn.onclick = (e) => { e.preventDefault(); downloadBlob(outTarget, outName); };
+      }
+      if ($('bgReadout')) {
+        $('bgReadout').textContent = `${previewOnly ? '👁️ PREVIEW 2s · ' : ''}LISTO: ${outName} · ${sizeMB} MB · Motor: ${result.scaleMode}`;
+      }
+      if ($('bgResult')) $('bgResult').style.display = 'block';
+      if (window.KapturaComparator && $('bgCompareBox')) {
+        const bSrc = result.previewSourceUrl ? { url: result.previewSourceUrl, revoke: () => {} } : mediaPreviewSrc(activeSrc);
+        const aSrc = mediaPreviewSrc(result.blob || result);
+        bgBeforeRevoke = bSrc.revoke;
+        bgAfterRevoke = aSrc.revoke;
+        window.KapturaComparator.render($('bgCompareBox'), {
+          beforeSrc: bSrc.url,
+          afterSrc: aSrc.url,
+          isVideo: !result.isImage,
+          beforeLabel: previewOnly && !result.isImage ? 'ORIGINAL (2s)' : 'ORIGINAL',
+          afterLabel: backdrop === 'transparent' ? 'SIN FONDO (ALPHA)' : `FONDO ${backdrop.toUpperCase()}`,
+          integrity: result.integrity || null,
+          engineLabel: result.scaleMode || '',
+          checkerboard: true,
+        });
+      }
+      if (!previewOnly) {
+        downloadBlob(outTarget, outName);
+        const mimeMap = { png: 'image/png', webm: 'video/webm', mov: 'video/quicktime', mp4: 'video/mp4' };
+        await saveToVault({ blob: result.blob || null, remoteUrl: result.remoteUrl || null, name: outName, mime: mimeMap[result.ext] || 'video/mp4', durationSec: 'N/A', sizeBytes: outBytes });
+      }
+      status.textContent = previewOnly
+        ? '👁️ Preview de recorte listo sobre tablero de transparencia.'
+        : `✅ Fondo eliminado (${result.scaleMode}). Guardado en Bóveda.`;
+      toast(previewOnly ? 'Preview BG Studio abierto en Inspector.' : 'Eliminación de fondo completada.', 'success');
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        status.textContent = '✕ Proceso cancelado por el operador.';
+        toast('BG Studio cancelado limpiamente.', 'notice');
+      } else {
+        status.textContent = '';
+        toast(e.message || String(e), 'error');
+      }
+    } finally {
+      activeBgCtrl = null;
+      activeBgTaskId = '';
+      if ($('btnBgRemoveNow')) $('btnBgRemoveNow').disabled = false;
+      if ($('btnBgPreview2s')) $('btnBgPreview2s').disabled = false;
+      if ($('btnCancelBg')) $('btnCancelBg').style.display = 'none';
+      setTimeout(() => setProgress('bgProgressBarBg', 'bgProgressBarFill', 0), 800);
+    }
+  }
+
+  if ($('btnBgRemoveNow')) $('btnBgRemoveNow').addEventListener('click', () => executeBgRemove({ previewOnly: false }));
+  if ($('btnBgPreview2s')) $('btnBgPreview2s').addEventListener('click', () => executeBgRemove({ previewOnly: true }));
+
+  /* ---- GPU Batch Queue UI Dock ----------------------------------------- */
+  const batchQueue = window.KapturaBatchQueue ? window.KapturaBatchQueue.createQueue() : null;
+
+  function renderBatchDock(snap) {
+    const dock = $('batchQueueDock');
+    if (!dock || !snap) return;
+    if (!snap.items.length) {
+      dock.style.display = 'none';
+      return;
+    }
+    dock.style.display = 'block';
+    if ($('batchQueueSummary')) {
+      $('batchQueueSummary').textContent = `${snap.queuedCount} en cola · ${snap.completedCount} listos · ${snap.items.length} total`;
+    }
+    if ($('btnBatchStart')) $('btnBatchStart').disabled = snap.running || snap.queuedCount === 0;
+    if ($('btnBatchCancel')) $('btnBatchCancel').style.display = snap.running ? 'inline-flex' : 'none';
+    const list = $('batchQueueList');
+    if (!list) return;
+    list.innerHTML = snap.items.map((it) => {
+      const mb = (it.sizeBytes / (1024 * 1024)).toFixed(2);
+      const pct = Math.round((it.progress || 0) * 100);
+      const cls = it.status === 'completed' ? 'done' : (it.status === 'failed' || it.status === 'cancelled' ? 'err' : '');
+      const dlHtml = it.status === 'completed' && (it.outputUrl || it.outputBlob)
+        ? `<button class="vault-btn" data-bq-dl="${it.id}" style="flex:0 0 auto; padding:4px 10px">⬇</button>`
+        : '';
+      return `<div class="batch-row">
+        <div>
+          <div class="batch-row-name">${escapeHtml(it.name)}</div>
+          <div class="batch-row-meta">${escapeHtml(it.label)} · ${mb} MB${it.error ? ' · ' + escapeHtml(it.error) : ''}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px">
+          <span class="batch-row-state ${cls}">${it.status.toUpperCase()} ${pct}% · ${escapeHtml(it.stage)}</span>
+          ${dlHtml}
+          <button class="vault-btn del" data-bq-rm="${it.id}" style="flex:0 0 auto; padding:4px 8px">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    list.querySelectorAll('[data-bq-rm]').forEach((b) => {
+      b.addEventListener('click', () => batchQueue && batchQueue.removeItem(b.dataset.bqRm));
+    });
+    list.querySelectorAll('[data-bq-dl]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const cur = snap.items.find((x) => x.id === b.dataset.bqDl);
+        if (cur) downloadBlob(cur.outputBlob || cur.outputUrl, cur.outputName || cur.name);
+      });
+    });
+  }
+
+  function enqueueBatchFiles(tab, files) {
+    if (!batchQueue || !files || !files.length) return;
+    const labels = { upskaletor: 'UPSKALETOR', bgremove: 'BG STUDIO', compressor: 'COMPRESOR', converter: 'V-CONVERTER' };
+    files.forEach((f) => batchQueue.enqueue({ file: f, tab, label: labels[tab] || tab }));
+    toast(`📦 Lote de ${files.length} archivos añadido a la Cola GPU (ejecución secuencial segura).`, 'success');
+  }
+
+  async function runBatchItem(item, { onProgress, signal }) {
+    const file = item.file;
+    const isImg = detectMediaKind(file) === 'image';
+    if (item.tab === 'upskaletor') {
+      const profSel = $('upskaletorProfileSelect');
+      let prof = profSel ? profSel.value : '4k_cas';
+      if (window.KapturaUpskaletor && !window.KapturaUpskaletor.isProfileCompatible(prof, isImg ? 'image' : 'video')) {
+        prof = '4k_cas';
+      }
+      const res = await window.KapturaUpskaletor.run(file, prof, $('upskaletorEngineSelect') ? $('upskaletorEngineSelect').value : 'auto', {
+        caps,
+        sharpen: $('upskaletorDetailSelect') ? Number($('upskaletorDetailSelect').value) : undefined,
+        onProgress,
+        signal,
+      });
+      if (res.mode === 'handoff') throw new Error(res.reason || 'Handoff requerido');
+      const name = `${baseName(file.name)}_UPSKALED.${res.ext}`;
+      await saveToVault({ blob: res.blob || null, remoteUrl: res.remoteUrl || null, name, mime: (res.isImage ? 'image/' : 'video/') + res.ext, durationSec: 'N/A', sizeBytes: res.sizeBytes || 0 });
+      return { blob: res.blob, remoteUrl: res.remoteUrl, outputName: name };
+    }
+    if (item.tab === 'bgremove' && window.KapturaBgRemover) {
+      let eng = $('bgEngineSelect') ? $('bgEngineSelect').value : 'auto';
+      let bd = $('bgBackdropSelect') ? $('bgBackdropSelect').value : 'transparent';
+      if (!window.KapturaBgRemover.isEngineCompatible(eng, isImg ? 'image' : 'video')) eng = 'auto';
+      if (!window.KapturaBgRemover.isBackdropCompatible(bd, isImg ? 'image' : 'video')) bd = 'transparent';
+      const res = await window.KapturaBgRemover.run(file, {
+        engine: eng,
+        backdrop: bd,
+        bgColor: $('bgSolidColor') ? $('bgSolidColor').value : '#050814',
+        blurStrength: $('bgBlurRange') ? Number($('bgBlurRange').value) : 23,
+        customBgFile: bgCustomFile,
+        edgeRefine: $('bgEdgeSelect') ? Number($('bgEdgeSelect').value) : 0,
+        decontaminate: $('bgDecontaminateSelect') ? $('bgDecontaminateSelect').value !== '0' : true,
+        onProgress,
+        signal,
+      });
+      const name = `${baseName(file.name)}_NOBG_${bd}.${res.ext}`;
+      await saveToVault({ blob: res.blob || null, remoteUrl: res.remoteUrl || null, name, mime: (isImg ? 'image/' : 'video/') + res.ext, durationSec: 'N/A', sizeBytes: res.sizeBytes || 0 });
+      return { blob: res.blob, remoteUrl: res.remoteUrl, outputName: name };
+    }
+    if (item.tab === 'compressor') {
+      const targetMB = parseFloat($('compressorBudget') ? $('compressorBudget').value : '15') || 15;
+      const fmt = $('compressorFormat') ? $('compressorFormat').value : 'auto';
+      const quality = $('compressorQuality') ? $('compressorQuality').value : 'max';
+      if (isImg) {
+        const r = await window.KapturaCompressor.compressImage(file, { targetMB, format: fmt === 'auto' ? 'webp' : fmt, quality, onProgress });
+        const name = `${baseName(file.name)}_COMPRESSED.${r.ext}`;
+        await saveToVault({ blob: r.blob, name, mime: 'image/' + r.ext, durationSec: 'N/A', sizeBytes: r.blob.size });
+        return { blob: r.blob, outputName: name };
+      }
+      const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
+      const cp = daemonCodecParams(fmt === 'auto' ? 'mp4' : fmt);
+      const r = useDaemon
+        ? await window.KapturaDaemon.transcodeViaDaemon(file, { targetMB, container: cp.container, codec: cp.codec, quality, onProgress, signal })
+        : await window.KapturaCompressor.compressVideo(file, { targetMB, container: cp.container, quality, caps, onProgress });
+      const name = `${baseName(file.name)}_COMPRESSED.${r.ext}`;
+      await saveToVault({ blob: r.blob || null, remoteUrl: r.remoteUrl || null, name, mime: 'video/' + r.ext, durationSec: 'N/A', sizeBytes: r.sizeBytes || (r.blob ? r.blob.size : 0) });
+      return { blob: r.blob, remoteUrl: r.remoteUrl, outputName: name };
+    }
+    const fmt = $('convFormat') ? $('convFormat').value : 'mp4';
+    const cp = daemonCodecParams(fmt);
+    const useDaemon = window.KapturaDaemon && window.KapturaDaemon.isReadyForTranscode();
+    const r = useDaemon
+      ? await window.KapturaDaemon.transcodeViaDaemon(file, { container: cp.container, codec: cp.codec, quality: $('convQuality') ? $('convQuality').value : 'max', onProgress, signal })
+      : await window.KapturaTranscoder.transcode(file, { caps, container: cp.container, quality: $('convQuality') ? $('convQuality').value : 'max', onProgress });
+    const name = `${baseName(file.name)}_CONVERTED.${r.ext}`;
+    return { blob: r.blob, remoteUrl: r.remoteUrl, outputName: name };
+  }
+
+  if (batchQueue) {
+    batchQueue.subscribe(renderBatchDock);
+    if ($('btnBatchStart')) $('btnBatchStart').addEventListener('click', () => batchQueue.runAll(runBatchItem));
+    if ($('btnBatchCancel')) $('btnBatchCancel').addEventListener('click', () => batchQueue.cancelAll());
+    if ($('btnBatchClear')) $('btnBatchClear').addEventListener('click', () => batchQueue.clearDone());
+  }
 
   /* ---- tabs ------------------------------------------------------------- */
   document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -1531,6 +2159,12 @@
 
   /* ---- boot ------------------------------------------------------------- */
   applySvgMediaMode('video');
+  applyConverterCodecLocks();
+  updateBgReadiness(null);
+  syncBgContextualControls();
   refreshVault();
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
   if (!caps.canMp4) toast('Este navegador no puede codificar MP4; se usará WebM real donde aplique.', 'notice', 8000);
 })();

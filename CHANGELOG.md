@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0
+
+- adds **BG STUDIO (`#tab-bgremove`)** for studio-grade image and video background removal: **BiRefNet 1024px ONNX** + Guided Filter + foreground color decontamination for images, **RVM ResNet-50 CUDA FP16** (46–64 FPS @ 1080p) / **RVM MobileNetV3 ONNX** temporal video matting, FFmpeg **Chroma-Key + Despill GPU**, WebM VP9 Alpha (`yuva420p`), ProRes 4444 Alpha (`.mov`), DSLR Bokeh blur, solid color, or custom image compositing, plus an honest zero-install in-browser matte & chroma engine;
+- adds Pre-Flight Media Diagnostic & real ETA estimator (`POST /probe`, `js/preflight.js`) plus 2-second synchronized frame-exact **Preview in Inspector** (`👁️ PREVIEW 2s EN INSPECTOR`) with checkerboard transparency verification in `js/comparator.js`;
+- adds Vault Auto-Heal (zero 404 console errors for GC-expired temporary disk exports, 1-click cleanup) and Permanent Disk Pinning (`exports/vault/`, `POST /vault/pin`, `DELETE /exports/vault/:name`);
+- adds sequential GPU **Batch Queue (`#batchQueueDock`, `js/batch-queue.js`)** with multi-file dropzone support and disk-persisted job registry (`exports/.jobs_registry.json`, `GET /jobs`, FIFO `MAX_CONCURRENT_GPU = 1`);
+- adds **`HEVC (H.265 NVENC)`** and verified 1-frame hardware **`AV1 NVENC`** encoder probing (locking unsupported encoders honestly per GPU generation), live GPU thermal/VRAM telemetry (`GET /telemetry/gpu`, `#statGpuThermal`), and automatic thermal cooling pauses above 86°C;
+- adds one-click **Forensic Proof PNG** export (`📸 PROOF PNG`) in `js/comparator.js` and full installable offline PWA support (`manifest.json`, `sw.js`, `icons/kaptura-icon.svg`).
+
 ## 3.1.0
 
 - introduces the asynchronous GPU job queue (`?async=1` -> `202 Accepted`, `GET /jobs/:taskId`, `streaming.jobsEndpoint: "/jobs"`), disables HTTP request/socket timeouts (`requestTimeout = 0`), streams uploads up to 2 GB directly to disk (`streamRequestToFile`), and keeps large video upscales disk-backed via `/exports/*`;

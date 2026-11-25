@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_FILES = (
     "KAPTURA.cmd",
     "index.html",
+    "manifest.json",
+    "sw.js",
     "package.json",
     "README.md",
     "BENCHMARK_PROOF.md",
@@ -27,6 +29,7 @@ PACKAGE_FILES = (
 PACKAGE_DIRS = (
     "css",
     "fonts",
+    "icons",
     "js",
     "daemon",
 )

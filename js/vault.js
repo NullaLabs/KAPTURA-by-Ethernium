@@ -70,6 +70,23 @@
     }));
   }
 
+  function update(id, patch) {
+    return open().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction([STORE], 'readwrite');
+      const store = tx.objectStore(STORE);
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (!cur) return reject(new Error('Elemento no encontrado en la Bóveda.'));
+        const next = { ...cur, ...(patch || {}), id };
+        const putReq = store.put(next);
+        putReq.onsuccess = () => resolve(next);
+        putReq.onerror = () => reject(new Error('No se pudo actualizar el elemento de la Bóveda.'));
+      };
+      getReq.onerror = () => reject(new Error('No se pudo leer el elemento de la Bóveda.'));
+    }));
+  }
+
   function clear() {
     return open().then((d) => new Promise((resolve, reject) => {
       const tx = d.transaction([STORE], 'readwrite');
@@ -95,7 +112,7 @@
     return { src: '', revoke: () => {} };
   }
 
-  const api = { open, add, getAll, remove, clear, estimate, getRecordMediaSrc };
+  const api = { open, add, getAll, remove, update, clear, estimate, getRecordMediaSrc };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.KapturaVault = api;
 })(typeof self !== 'undefined' ? self : this);

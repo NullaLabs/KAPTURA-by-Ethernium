@@ -115,6 +115,8 @@
             height: profile.h || 0,
             denoise: Boolean(profile.denoise),
             sharpen: hasSharpenOpt ? resolvedSharpen : undefined,
+            previewSec: Number(opts.previewSec) || 0,
+            previewStartSec: Number(opts.previewStartSec) || 0,
             keepOnDisk: !isImg,
             quality: 'high',
             taskId: opts.taskId,
@@ -133,6 +135,8 @@
               height: aiRes.height || profile.h || 0,
               scaleMode: aiRes.scaleMode,
               integrity: aiRes.integrity || null,
+              previewMode: Boolean(aiRes.previewMode),
+              previewSourceUrl: aiRes.previewSourceUrl || '',
               fellBack: false,
               isImage: isImg,
               neural: true,
@@ -208,6 +212,8 @@
           quality: 'max',
           sharpen: resolvedSharpen,
           cfr: Boolean(profile.cfr),
+          previewSec: Number(opts.previewSec) || 0,
+          previewStartSec: Number(opts.previewStartSec) || 0,
           keepOnDisk: true,
           taskId: opts.taskId,
           signal: opts.signal,
@@ -219,6 +225,8 @@
       }
     }
     if (!result) {
+      const pSec = Number(opts.previewSec) || 0;
+      const pStart = Math.max(0, Number(opts.previewStartSec) || 0);
       result = await Transcoder.transcode(file.remoteUrl || file, {
         width: targetW,
         height: targetH,
@@ -228,6 +236,7 @@
         quality: 'max',
         sharpen: resolvedSharpen,
         cfr: Boolean(profile.cfr),
+        ...(pSec > 0 ? { startSec: pStart, endSec: pStart + pSec } : {}),
         caps: opts.caps,
         onProgress: opts.onProgress,
       });
@@ -243,6 +252,8 @@
       height: result.height,
       scaleMode: result.scaleMode,
       integrity: result.integrity || null,
+      previewMode: Boolean(result.previewMode || Number(opts.previewSec) > 0),
+      previewSourceUrl: result.previewSourceUrl || '',
       fellBack: result.fellBack,
       isImage: false,
     };

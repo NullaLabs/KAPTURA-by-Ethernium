@@ -11,9 +11,20 @@ const p = (f) => path.join(__dirname, '..', 'js', f);
 // node-safe modules (guarded module.exports, no DOM at load time)
 const Caps = require(p('capabilities.js'));
 const Ups = require(p('upskaletor.js'));
+const BgRem = require(p('bg-remover.js'));
+const Preflight = require(p('preflight.js'));
+const BatchQueue = require(p('batch-queue.js'));
 
 let failures = 0;
 const check = (n, c) => { console.log((c ? '  PASS  ' : '  FAIL  ') + n); if (!c) failures++; };
+
+// --- BG Studio, Preflight & Batch Queue Node-safe module contracts ----------
+check('BgRemover locks rvm_cuda for images', BgRem.isEngineCompatible('rvm_cuda', 'image') === false && BgRem.isEngineCompatible('rvm_cuda', 'video') === true);
+check('BgRemover locks prores & greenscreen for images', BgRem.isBackdropCompatible('prores', 'image') === false && BgRem.isBackdropCompatible('greenscreen', 'image') === false && BgRem.isBackdropCompatible('prores', 'video') === true);
+check('Preflight estimateEtaSec computes 4K fast path & BG ETA', Preflight.estimateEtaSec({ width: 3840, height: 2160, fps: 60, duration: 10 }, '4k_ai', { neuralAvailable: true }) <= 20 && Preflight.estimateEtaSec({ width: 512, height: 512, isImage: true }, 'bg_remove', { bgRemoval: { birefnet: true } }) >= 1);
+const q = BatchQueue.createQueue();
+q.enqueue({ file: { name: 'a.mp4', size: 1024 }, tab: 'upskaletor' });
+check('BatchQueue enqueues cleanly', q.getSnapshot().queuedCount === 1);
 
 // --- honest codec fallback --------------------------------------------------
 const noMp4 = { recorder: { 'video/webm;codecs=vp9': true } };

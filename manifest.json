@@ -1,0 +1,18 @@
+{
+  "name": "KAPTURA by Ethernium",
+  "short_name": "KAPTURA",
+  "description": "Local-first 4K Capture, Neural Upscaling & Studio Background Removal Workstation.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#030508",
+  "theme_color": "#00F0FF",
+  "icons": [
+    {
+      "src": "icons/kaptura-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "index.html"
+      - "manifest.json"
+      - "sw.js"
+      - "icons/**"
       - "css/**"
       - "fonts/**"
       - "js/**"
@@ -46,8 +49,8 @@ jobs:
       - name: Stage allowlisted static Studio artifact
         run: |
           mkdir -p _site
-          cp index.html BENCHMARK_PROOF.md LICENSE _site/
-          cp -R css fonts js _site/
+          cp index.html manifest.json sw.js BENCHMARK_PROOF.md LICENSE _site/
+          cp -R css fonts icons js _site/
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

@@ -1,18 +1,54 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Ethernium\UPSKALETOR"),
+    [string]$MattingDir = "",
     [switch]$SkipEsrgan,
     [switch]$SkipRife,
+    [switch]$SkipMatting,
     [switch]$Force,
     [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+function Download-Artifact {
+    param([string]$Uri, [string]$OutFile)
+    $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source -fL --retry 3 --connect-timeout 20 -sS -o $OutFile $Uri
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 1024) { return }
+    }
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+}
+
+function Resolve-MattingDir {
+    param([string]$Requested, [string]$PrimaryRoot)
+    if ($Requested) { return [IO.Path]::GetFullPath($Requested) }
+    $qualifier = Split-Path -Qualifier $PrimaryRoot
+    if ($qualifier) {
+        try {
+            $freeBytes = [System.IO.DriveInfo]::new($qualifier).AvailableFreeSpace
+            if ($freeBytes -lt 1.5GB) {
+                if (Test-Path "E:\UPSKALETOR") { return "E:\UPSKALETOR\models\matting" }
+                $repoRoot = Split-Path -Parent $PSScriptRoot
+                return (Join-Path $repoRoot ".models\matting")
+            }
+        } catch {}
+    }
+    return (Join-Path $PrimaryRoot "models\matting")
+}
 
 $target = [IO.Path]::GetFullPath($InstallRoot)
 $esrganUrl = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip"
 $rifeUrl = "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip"
+$mattingDir = Resolve-MattingDir -Requested $MattingDir -PrimaryRoot $target
+$mattingModels = @(
+    @{ Name = "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"; Url = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx" },
+    @{ Name = "rvm_resnet50_fp16.torchscript"; Url = "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50_fp16.torchscript" },
+    @{ Name = "rvm_mobilenetv3_fp32.onnx"; Url = "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx" }
+)
 
 $esrganExe = Join-Path $target "realesrgan-ncnn-vulkan.exe"
 $esrganModelCheck = Join-Path $target "models\realesrgan-x4plus.bin"
@@ -21,15 +57,24 @@ $rifeModelCheck = Join-Path $target "rife-v4.6\flownet.bin"
 
 $hasEsrgan = (Test-Path $esrganExe) -and (Test-Path $esrganModelCheck)
 $hasRife = (Test-Path $rifeExe) -and (Test-Path $rifeModelCheck)
+$hasMattingAll = ($mattingModels | Where-Object { -not (Test-Path (Join-Path $mattingDir $_.Name)) } | Measure-Object).Count -eq 0
 
 Write-Host "KAPTURA Neural Engines Bootstrapper -> $target"
 Write-Host ("  Real-ESRGAN Vulkan : " + $(if ($hasEsrgan) { "INSTALLED" } else { "MISSING" }))
 Write-Host ("  RIFE v4.6 Vulkan   : " + $(if ($hasRife) { "INSTALLED" } else { "MISSING" }))
+Write-Host ("  BG Matting Models  : " + $(if ($hasMattingAll) { "INSTALLED" } else { "PARTIAL/MISSING" }))
 
 if ($DryRun) {
     Write-Host "[DryRun] Planned install root: $target"
     if (-not $SkipEsrgan -and (-not $hasEsrgan -or $Force)) { Write-Host "[DryRun] Would download: $esrganUrl" }
     if (-not $SkipRife -and (-not $hasRife -or $Force)) { Write-Host "[DryRun] Would download: $rifeUrl" }
+    if (-not $SkipMatting) {
+        foreach ($m in $mattingModels) {
+            if ($Force -or -not (Test-Path (Join-Path $mattingDir $m.Name))) {
+                Write-Host "[DryRun] Would download: $($m.Url)"
+            }
+        }
+    }
     exit 0
 }
 
@@ -85,11 +130,30 @@ if (-not $SkipRife -and (-not $hasRife -or $Force)) {
     }
 }
 
-Write-Host "`nInstalled binary SHA-256 receipts:"
-foreach ($exe in @($esrganExe, $rifeExe)) {
-    if (Test-Path $exe) {
-        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
-        Write-Host ("  " + (Split-Path $exe -Leaf) + " -> " + $h)
+if (-not $SkipMatting) {
+    New-Item -ItemType Directory -Force -Path $mattingDir | Out-Null
+    foreach ($m in $mattingModels) {
+        $dst = Join-Path $mattingDir $m.Name
+        if ($Force -or -not (Test-Path $dst) -or ((Get-Item $dst).Length -lt 1024)) {
+            $tmpFile = "$dst.part"
+            Write-Host "Downloading $($m.Name)..."
+            try {
+                Download-Artifact -Uri $m.Url -OutFile $tmpFile
+                Move-Item -LiteralPath $tmpFile -Destination $dst -Force
+            } catch {
+                Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
+                throw
+            }
+        }
+    }
+}
+
+Write-Host "`nInstalled binary & model SHA-256 receipts:"
+$receiptTargets = @($esrganExe, $rifeExe) + ($mattingModels | ForEach-Object { Join-Path $mattingDir $_.Name })
+foreach ($itemPath in $receiptTargets) {
+    if (Test-Path $itemPath) {
+        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $itemPath).Hash
+        Write-Host ("  " + (Split-Path $itemPath -Leaf) + " -> " + $h)
     }
 }
 Write-Host "`nReady. Start Studio + GPU Daemon with: npm run daemon"

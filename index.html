@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#030508">
 <title>KAPTURA by Ethernium — CHRONO Capture Studio</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/kaptura-icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/hud.css">
 </head>
@@ -41,6 +44,7 @@
     <button class="tab-btn" data-tab="tab-vault">📁 VAULT (<span id="vault-count">0</span>)</button>
     <button class="tab-btn" data-tab="tab-converter">⚡ V-CONVERTER</button>
     <button class="tab-btn" data-tab="tab-upskaletor">◆ UPSKALETOR AI</button>
+    <button class="tab-btn" data-tab="tab-bgremove">🎭 BG STUDIO</button>
   </div>
 
   <!-- TAB 1: RECORDER STUDIO -->
@@ -182,8 +186,9 @@
         <div class="export-dropdown">
           <button class="btn btn-secondary" id="btnExportMenu">💾 EXPORT FORMAT ▼</button>
           <div class="export-menu" id="exportMenu">
-            <div class="export-item" data-fmt="mp4"><span>🎬 Master MP4</span> <span class="fmt-tag">real re-encode</span></div>
-            <div class="export-item" data-fmt="webm"><span>🌐 WebM Stream</span> <span class="fmt-tag">real re-encode</span></div>
+            <div class="export-item" data-fmt="mp4"><span>🎬 Master MP4 (H.264)</span> <span class="fmt-tag">real re-encode</span></div>
+            <div class="export-item" data-fmt="hevc"><span>💎 Master MP4 HEVC (H.265)</span> <span class="fmt-tag">NVENC -50% MB</span></div>
+            <div class="export-item" data-fmt="webm"><span>🌐 WebM Stream (VP9)</span> <span class="fmt-tag">real re-encode</span></div>
             <div class="export-item" data-fmt="gif"><span>🎞️ Animated GIF</span> <span class="fmt-tag">native encoder</span></div>
           </div>
         </div>
@@ -209,6 +214,7 @@
         <button class="btn btn-secondary" type="button" id="btnSendToCompressor">▣ → COMPRESOR</button>
         <button class="btn btn-secondary" type="button" id="btnSendToConverter">⚡ → V-CONVERTER</button>
         <button class="btn btn-secondary" type="button" id="btnSendToUpskaletor">◆ → UPSKALETOR</button>
+        <button class="btn btn-secondary" type="button" id="btnSendToBgRemove">🎭 → BG STUDIO</button>
         <a class="btn btn-download-pro" id="btnDownloadActive" style="text-decoration:none" download="kaptura_master.mp4">⬇ DESCARGAR MASTER</a>
         <button class="btn btn-secondary" type="button" id="btnBackToLive">🔄 MODO CAPTURA</button>
       </div>
@@ -280,9 +286,10 @@
       <div class="dz-icon" style="color:var(--cyan)">🗜️</div>
       <div class="dz-title" id="compressorDzTitle">DRAG &amp; DROP IMAGE OR VIDEO TO COMPRESS</div>
       <div class="dz-sub" id="compressorDzSub">.png · .jpg · .webp · .mp4 · .webm · .mov — optimización adaptativa local</div>
-      <input type="file" id="compressorFileInput" accept="image/*,video/*" style="display:none">
+      <input type="file" id="compressorFileInput" accept="image/*,video/*" multiple style="display:none">
     </div>
     <div style="text-align:center"><span class="media-mode-pill" id="compressorMediaBadge"></span></div>
+    <div class="preflight-strip" id="compressorPreflight"></div>
     <div class="progress-bar-bg" id="compressorProgressBarBg"><div class="progress-bar-fill" id="compressorProgressBarFill" style="background:linear-gradient(90deg, var(--cyan), var(--emerald))"></div></div>
     <div id="compressorStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--cyan); margin-top:10px; text-align:center"></div>
     <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(4, 1fr);">
@@ -302,7 +309,9 @@
           <option value="auto" selected>⚡ Auto (Best for file type)</option>
           <option value="webp">🌐 WebP (Optimal for images)</option>
           <option value="jpeg">🖼️ JPEG (Universal image)</option>
-          <option value="mp4">🎬 MP4 (Universal video)</option>
+          <option value="mp4">🎬 MP4 (H.264 Universal)</option>
+          <option value="hevc">💎 MP4 HEVC (H.265 NVENC · -50% MB)</option>
+          <option value="av1_mp4">🚀 MP4 AV1 (NVENC · RTX 40xx+)</option>
           <option value="webm">🚀 WebM (VP9 video)</option>
         </select>
       </div>
@@ -368,11 +377,14 @@
 
   <!-- TAB 2: VAULT -->
   <div id="tab-vault" class="tab-content">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:18px">
       <div style="font-family:'Fira Code', monospace; font-size:13px; color:var(--muted)">
-        HISTORIAL LOCAL (<span style="color:var(--emerald)">INDEXEDDB LOCAL-FIRST</span>)
+        HISTORIAL LOCAL (<span style="color:var(--emerald)">INDEXEDDB LOCAL-FIRST · PIN PERMANENTE :3370</span>)
       </div>
-      <button class="btn btn-secondary" style="padding:6px 14px; font-size:11px" id="btnClearVault">🗑️ CLEAR ALL VAULT</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-secondary" style="padding:6px 14px; font-size:11px; display:none" id="btnPruneExpiredVault">🧹 LIMPIAR EXPIRADOS</button>
+        <button class="btn btn-secondary" style="padding:6px 14px; font-size:11px" id="btnClearVault">🗑️ CLEAR ALL VAULT</button>
+      </div>
     </div>
     <div class="vault-grid" id="vaultGrid"></div>
   </div>
@@ -387,8 +399,9 @@
       <div class="dz-icon">⚡</div>
       <div class="dz-title">DRAG &amp; DROP VIDEO FILE OR CLICK TO BROWSE</div>
       <div class="dz-sub">.webm · .mp4 · .mov · .mkv — el archivo se procesa localmente</div>
-      <input type="file" id="fileInput" accept="video/*" style="display:none">
+      <input type="file" id="fileInput" accept="video/*" multiple style="display:none">
     </div>
+    <div class="preflight-strip" id="converterPreflight"></div>
 
     <div class="progress-bar-bg" id="progressBarBg"><div class="progress-bar-fill" id="progressBarFill"></div></div>
     <div id="converterStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--cyan); margin-top:10px; text-align:center"></div>
@@ -398,6 +411,8 @@
         <div class="control-label">TARGET FORMAT</div>
         <select id="convFormat">
           <option value="mp4" selected>🎬 MP4 (H.264)</option>
+          <option value="hevc">💎 MP4 HEVC (H.265 NVENC)</option>
+          <option value="av1_mp4">🚀 MP4 AV1 (NVENC · RTX 40xx+)</option>
           <option value="webm">🌐 WebM (VP9)</option>
           <option value="gif">🎞️ Animated GIF</option>
         </select>
@@ -440,10 +455,11 @@
       <div class="dropzone" id="upskaletorDropzone" style="border-color:var(--violet); background:rgba(139,92,246,0.04)">
         <div class="dz-icon" style="color:var(--violet)">◆</div>
         <div class="dz-title" id="upskaletorDzTitle">DRAG &amp; DROP VIDEO OR IMAGE HERE TO UPSCALE</div>
-        <div class="dz-sub" id="upskaletorDzSub">.mp4 · .webm · .mov · .png · .jpg · .webp — o usa tu última grabación</div>
-        <input type="file" id="upskaletorFileInput" accept="video/*,image/*" style="display:none">
+        <div class="dz-sub" id="upskaletorDzSub">.mp4 · .webm · .mov · .png · .jpg · .webp — o usa tu última grabación (soporta múltiples en lote)</div>
+        <input type="file" id="upskaletorFileInput" accept="video/*,image/*" multiple style="display:none">
       </div>
       <div style="text-align:center"><span class="media-mode-pill" id="upskaletorMediaBadge"></span></div>
+      <div class="preflight-strip" id="upskaletorPreflight"></div>
       <div class="progress-bar-bg" id="upskaletorProgressBarBg" style="margin-top:16px"><div class="progress-bar-fill" id="upskaletorProgressBarFill" style="background:linear-gradient(90deg, var(--violet), var(--cyan))"></div></div>
       <div id="upskaletorStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--violet); margin-top:10px; text-align:center"></div>
 
@@ -488,6 +504,7 @@
         </div>
         <div class="control-card" style="display:flex; flex-direction:column; justify-content:flex-end">
           <button class="btn btn-primary" style="width:100%; background:linear-gradient(135deg, var(--violet) 0%, #6D28D9 100%)" id="btnUpscaleNow">🚀 START UPSKALETOR</button>
+          <button class="btn btn-secondary" id="btnUpscalePreview2s" type="button" style="width:100%; margin-top:8px" title="Procesa solo una muestra de 2 segundos y ábrela en el Inspector A/B antes del render completo">👁️ PREVIEW 2s EN INSPECTOR</button>
           <button class="btn btn-danger" id="btnCancelUpscale" type="button" style="display:none; width:100%; margin-top:8px">✕ CANCELAR PROCESO</button>
         </div>
       </div>
@@ -512,12 +529,130 @@
     </div>
   </div>
 
+  <!-- TAB 5: BG STUDIO PREMIUM (Images & Videos Matte / Chroma / Bokeh / Alpha) -->
+  <div id="tab-bgremove" class="tab-content">
+    <div class="engine-panel" style="border-color:rgba(0,255,157,0.38)">
+      <div class="engine-kicker" style="color:var(--emerald)">NEURAL MATTING + CHROMA STUDIO · ZERO CLOUD</div>
+      <h2 class="engine-title">BG STUDIO <span style="color:var(--cyan)">by Ethernium</span></h2>
+      <p class="engine-copy">
+        Eliminación de fondos de precisión para <strong>imágenes (BiRefNet 1024px + Guided Filter + Anti-Halo)</strong> y <strong>vídeos (RVM ResNet-50 RTX CUDA temporal sin parpadeo / FFmpeg Chroma-Key + Despill GPU)</strong>.
+        Exporta en PNG RGBA transparente, WebM VP9 Alpha (<code>yuva420p</code>), ProRes 4444 Alpha, Bokeh DSLR o fondo personalizado.
+      </p>
+
+      <div class="readiness-strip" id="bgReadinessBar"></div>
+
+      <div class="dropzone" id="bgDropzone" style="border-color:var(--emerald); background:rgba(0,255,157,0.03)">
+        <div class="dz-icon" style="color:var(--emerald)">🎭</div>
+        <div class="dz-title" id="bgDzTitle">DRAG &amp; DROP IMAGEN O VÍDEO PARA QUITAR EL FONDO</div>
+        <div class="dz-sub" id="bgDzSub">.png · .jpg · .webp · .mp4 · .webm · .mov — soporta múltiples archivos en lote</div>
+        <input type="file" id="bgFileInput" accept="image/*,video/*" multiple style="display:none">
+      </div>
+      <div style="text-align:center"><span class="media-mode-pill" id="bgMediaBadge"></span></div>
+      <div class="preflight-strip" id="bgPreflight"></div>
+      <div class="progress-bar-bg" id="bgProgressBarBg" style="margin-top:16px"><div class="progress-bar-fill" id="bgProgressBarFill" style="background:linear-gradient(90deg, var(--emerald), var(--cyan))"></div></div>
+      <div id="bgStatus" style="font-family:'Fira Code', monospace; font-size:12px; color:var(--emerald); margin-top:10px; text-align:center"></div>
+
+      <div class="controls-grid" style="margin-top:20px; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));">
+        <div class="control-card">
+          <div class="control-label">MOTOR IA / CHROMA</div>
+          <select id="bgEngineSelect">
+            <option value="auto" selected>⚡ Auto Studio (BiRefNet Img / RVM RTX Vid)</option>
+            <option value="birefnet">💎 BiRefNet Ultra HD (1024px · Cabello/Objetos)</option>
+            <option value="rvm_cuda">🎬 RVM ResNet-50 RTX CUDA (60 FPS · Vídeo)</option>
+            <option value="rvm_onnx">🧠 RVM Fast Neural (Retratos / Preview 2s)</option>
+            <option value="chroma">🟩 Chroma-Key + Despill (Verde/Azul/Color)</option>
+          </select>
+        </div>
+        <div class="control-card">
+          <div class="control-label">FONDO DE SALIDA</div>
+          <select id="bgBackdropSelect">
+            <option value="transparent" selected>🏁 Transparente Alpha (PNG / WebM VP9)</option>
+            <option value="prores">🎞️ Apple ProRes 4444 Alpha (.mov NLE)</option>
+            <option value="greenscreen">🟩 Green Screen Studio #00FF00 (.mp4)</option>
+            <option value="bokeh">📷 Bokeh Retrato DSLR (Desenfoque fondo)</option>
+            <option value="solid">🎨 Color Sólido de Estudio</option>
+            <option value="custom_image">🖼️ Imagen Personalizada</option>
+          </select>
+        </div>
+        <div class="control-card">
+          <div class="control-label">REFINADO DE BORDE</div>
+          <select id="bgEdgeSelect">
+            <option value="-1">✂️ Ceñido (-1px contracción)</option>
+            <option value="0" selected>✨ Studio Balanceado (Guided Filter)</option>
+            <option value="1">🫧 Suave (+1px feather)</option>
+            <option value="2">🌫️ Difuso (+2px aura suave)</option>
+          </select>
+        </div>
+        <div class="control-card">
+          <div class="control-label">ANTI-HALO / DESPILL</div>
+          <select id="bgDecontaminateSelect">
+            <option value="1" selected>🛡️ Activo (Descontaminación RGB de bordes)</option>
+            <option value="0">○ Desactivado (Raw Alpha)</option>
+          </select>
+        </div>
+        <div class="control-card" style="display:flex; flex-direction:column; justify-content:flex-end">
+          <button class="btn btn-primary" id="btnBgRemoveNow" type="button" style="width:100%">🎭 QUITAR FONDO (PREMIUM)</button>
+          <button class="btn btn-secondary" id="btnBgPreview2s" type="button" style="width:100%; margin-top:8px" title="Procesa una muestra rápida de 2s y ábrela sobre tablero de transparencia">👁️ PREVIEW 2s EN INSPECTOR</button>
+          <button class="btn btn-danger" id="btnCancelBg" type="button" style="display:none; width:100%; margin-top:8px">✕ CANCELAR PROCESO</button>
+        </div>
+      </div>
+
+      <div class="bg-subcontrols" id="bgContextOptions" style="display:none">
+        <div class="bg-subitem" id="bgSolidColorWrap" style="display:none">
+          <label for="bgSolidColor">🎨 COLOR DE FONDO</label>
+          <input type="color" id="bgSolidColor" value="#050814" class="bg-color-input">
+        </div>
+        <div class="bg-subitem" id="bgBlurWrap" style="display:none">
+          <label for="bgBlurRange">📷 INTENSIDAD BOKEH (<span id="bgBlurVal">23</span>px)</label>
+          <input type="range" id="bgBlurRange" min="7" max="45" step="2" value="23" class="gain-fader" style="width:140px">
+        </div>
+        <div class="bg-subitem" id="bgCustomImgWrap" style="display:none">
+          <button class="btn btn-secondary" type="button" id="btnPickBgCustomImg">🖼️ ELEGIR IMAGEN DE FONDO</button>
+          <input type="file" id="bgCustomImgInput" accept="image/*" style="display:none">
+          <span id="bgCustomImgName" style="font-family:'Fira Code', monospace; font-size:11px; color:var(--cyan)">Sin imagen</span>
+        </div>
+        <div class="bg-subitem" id="bgChromaWrap" style="display:none">
+          <label for="bgChromaColor">🎯 COLOR CLAVE</label>
+          <input type="color" id="bgChromaColor" value="#00FF00" class="bg-color-input">
+          <label for="bgChromaSim" style="margin-left:8px">TOLERANCIA</label>
+          <input type="range" id="bgChromaSim" min="0.05" max="0.50" step="0.01" value="0.20" class="gain-fader" style="width:90px">
+          <label for="bgChromaBlend" style="margin-left:8px">SUAVIZADO</label>
+          <input type="range" id="bgChromaBlend" min="0.01" max="0.35" step="0.01" value="0.08" class="gain-fader" style="width:90px">
+        </div>
+      </div>
+
+      <div id="bgResult" style="margin-top:16px; display:none; text-align:center">
+        <div class="proc-readout" id="bgReadout" style="display:inline-block; text-align:left; max-width:720px; width:100%; margin-bottom:10px; color:var(--emerald)"></div>
+        <div style="margin-bottom:10px">
+          <a class="btn btn-download-pro is-disabled" id="btnDownloadBgRemoved" style="text-decoration:none" aria-disabled="true" download="kaptura_bg_studio">⬇ DESCARGAR RESULTADO</a>
+        </div>
+        <div id="bgCompareBox" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GPU BATCH QUEUE DOCK -->
+  <div class="batch-dock" id="batchQueueDock" style="display:none">
+    <div class="batch-dock-head">
+      <div style="font-family:'Orbitron', monospace; font-size:11px; font-weight:700; color:var(--cyan)">
+        📦 COLA POR LOTES GPU · <span id="batchQueueSummary">0 en cola</span>
+      </div>
+      <div class="batch-dock-actions">
+        <button class="btn btn-primary" id="btnBatchStart" type="button" style="padding:5px 12px; font-size:10px">▶ INICIAR LOTE</button>
+        <button class="btn btn-danger" id="btnBatchCancel" type="button" style="padding:5px 10px; font-size:10px; display:none">✕ DETENER</button>
+        <button class="btn btn-secondary" id="btnBatchClear" type="button" style="padding:5px 10px; font-size:10px">🧹 LIMPIAR</button>
+      </div>
+    </div>
+    <div class="batch-list" id="batchQueueList"></div>
+  </div>
+
   <!-- TELEMETRY BAR -->
   <div class="telemetry-bar">
     <div>RECORDED FRAMES: <span class="stat-val" id="statFrames">0</span></div>
     <div>BUFFER SIZE: <span class="stat-val" id="statSize">0.0 MB</span></div>
     <div>SOURCE: <span class="stat-val" id="statSourceMode" style="color:var(--emerald)">CANVAS ENGINE</span></div>
     <div>DAEMON: <span class="stat-val" id="statDaemon" style="color:var(--muted)">STATIC (BROWSER)</span></div>
+    <div>GPU: <span class="stat-val" id="statGpuThermal" style="color:var(--muted)">—</span></div>
   </div>
 
   <!-- TRANSMEDIA BRAND ARCHITECTURE FOOTER -->
@@ -537,6 +672,7 @@
 <script src="js/compressor.js"></script>
 <script src="js/svg-vector.js"></script>
 <script src="js/upskaletor.js"></script>
+<script src="js/bg-remover.js"></script>
 <script src="js/vault.js"></script>
 <script src="js/audio-mixer.js"></script>
 <script src="js/capture.js"></script>
@@ -544,6 +680,8 @@
 <script src="js/liquid-shader.js"></script>
 <script src="js/studio-selects.js"></script>
 <script src="js/daemon-bridge.js"></script>
+<script src="js/preflight.js"></script>
+<script src="js/batch-queue.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
