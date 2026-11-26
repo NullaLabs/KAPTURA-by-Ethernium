@@ -875,7 +875,7 @@
           hasAlpha: Boolean(job.hasAlpha),
           engine: job.engine || (opts.engine || 'auto'),
           model: job.model || '',
-          scaleMode: `${job.engine === 'rvm_cuda' ? 'RVM ResNet50 CUDA FP16' : (job.engine === 'birefnet' ? 'BiRefNet 1024px ONNX' : (job.engine === 'rvm_onnx' ? 'RVM MobileNetV3 ONNX' : 'FFmpeg Chromakey+Despill GPU'))}`,
+          scaleMode: `${job.engine === 'birefnet_hr' ? 'BiRefNet HR-Matting 2K CUDA FP16 + RGB GF + MLFE' : (job.engine === 'rvm_cuda' ? 'RVM ResNet50 CUDA FP16 + RGB GF' : (job.engine === 'birefnet' ? 'BiRefNet 1024px ONNX + RGB GF + MLFE' : (job.engine === 'rvm_onnx' ? 'RVM MobileNetV3 ONNX' : 'FFmpeg Chromakey+Despill GPU')))}`,
           integrity: job.integrity || null,
           previewMode: Boolean(job.previewMode),
           previewSourceUrl: job.previewSourceDownloadUrl ? `${DAEMON_BASE}${job.previewSourceDownloadUrl}` : '',

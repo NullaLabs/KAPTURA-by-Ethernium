@@ -146,6 +146,23 @@ if (-not $SkipMatting) {
             }
         }
     }
+    $hrDir = Join-Path $mattingDir "BiRefNet_HR-matting"
+    New-Item -ItemType Directory -Force -Path $hrDir | Out-Null
+    $hrBase = "https://huggingface.co/ZhengPeng7/BiRefNet_HR-matting/resolve/main"
+    foreach ($hfFile in @("BiRefNet_config.py", "birefnet.py", "config.json", "model.safetensors")) {
+        $dst = Join-Path $hrDir $hfFile
+        if ($Force -or -not (Test-Path $dst) -or ((Get-Item $dst).Length -lt 100)) {
+            $tmpFile = "$dst.part"
+            Write-Host "Downloading BiRefNet_HR-matting/$hfFile..."
+            try {
+                Download-Artifact -Uri "$hrBase/$hfFile" -OutFile $tmpFile
+                Move-Item -LiteralPath $tmpFile -Destination $dst -Force
+            } catch {
+                Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
+                throw
+            }
+        }
+    }
 }
 
 Write-Host "`nInstalled binary & model SHA-256 receipts:"

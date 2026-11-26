@@ -300,8 +300,11 @@
         if (dh.rifeAvailable && !$('capRife')) {
           row.insertAdjacentHTML('beforeend', chip('RIFE v4.6 2×FPS', true, 'id="capRife"'));
         }
-        if (dh.bgRemoval && (dh.bgRemoval.birefnet || dh.bgRemoval.rvmCuda || dh.bgRemoval.rvmOnnx) && !$('capBgMatte')) {
-          row.insertAdjacentHTML('beforeend', chip(dh.bgRemoval.rvmCuda ? 'BG Matte (BiRefNet+CUDA)' : 'BG Matte (ONNX)', true, 'id="capBgMatte"'));
+        if (dh.bgRemoval && (dh.bgRemoval.birefnetHr || dh.bgRemoval.birefnet || dh.bgRemoval.rvmCuda || dh.bgRemoval.rvmOnnx) && !$('capBgMatte')) {
+          const matteLabel = dh.bgRemoval.birefnetHr
+            ? 'BG Matte (BiRefNet 2K+CUDA)'
+            : (dh.bgRemoval.rvmCuda ? 'BG Matte (BiRefNet+CUDA)' : 'BG Matte (ONNX)');
+          row.insertAdjacentHTML('beforeend', chip(matteLabel, true, 'id="capBgMatte"'));
         }
         if (gpuBtn && dh.ffmpegAvailable) gpuBtn.disabled = false;
         if ($('stageEncoderBadge')) {
@@ -1811,9 +1814,10 @@
     const h = dh || (window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {});
     const bgr = (h && h.bgRemoval) || {};
     const items = [
-      { label: 'BiRefNet 1024px', on: Boolean(h && h.online && bgr.birefnet) },
+      { label: 'BiRefNet 2K HR CUDA', on: Boolean(h && h.online && bgr.birefnetHr) },
+      { label: 'BiRefNet 1024px ONNX', on: Boolean(h && h.online && bgr.birefnet) },
       { label: 'RVM ResNet50 RTX CUDA', on: Boolean(h && h.online && bgr.rvmCuda) },
-      { label: 'RVM Fast Neural', on: Boolean(h && h.online && bgr.rvmOnnx) },
+      { label: 'RGB Guided + MLFE Anti-Halo', on: Boolean(h && h.online && (bgr.birefnetHr || bgr.birefnet || bgr.rvmCuda || bgr.rvmOnnx)) },
       { label: 'Chroma-Key + WebM/PNG Alpha', on: true },
     ];
     bar.innerHTML = items.map((i) => `<span class="readiness-pill ${i.on ? 'on' : 'off'}">${i.on ? '●' : '○'} ${i.label}</span>`).join('');
@@ -1914,7 +1918,7 @@
     try {
       const dh = window.KapturaDaemon && window.KapturaDaemon.getCachedHealth ? window.KapturaDaemon.getCachedHealth() : {};
       const bgCaps = (dh && dh.bgRemoval) || {};
-      const hasAnyNeural = Boolean(bgCaps.birefnet || bgCaps.rvmCuda || bgCaps.rvmOnnx);
+      const hasAnyNeural = Boolean(bgCaps.birefnetHr || bgCaps.birefnet || bgCaps.rvmCuda || bgCaps.rvmOnnx);
       const canPassRemote = Boolean(
         activeSrc.remoteUrl &&
         window.KapturaDaemon &&

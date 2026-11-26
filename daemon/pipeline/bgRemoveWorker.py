@@ -47,34 +47,62 @@ def cover_resize_rgb(img_rgb, w, h):
     return np.ascontiguousarray(resized[y0:y0 + h, x0:x0 + w])
 
 
-def fast_guided_filter(guide_gray_f32, src_f32, radius=6, eps=1e-3):
+def color_guided_filter(guide_rgb_f32, src_f32, radius=6, eps=1e-4):
+    """Exact 3-channel RGB Guided Filter (He et al. 2013) with closed-form 3x3 inverse."""
     ksize = (radius * 2 + 1, radius * 2 + 1)
-    mean_i = cv2.boxFilter(guide_gray_f32, cv2.CV_32F, ksize)
-    mean_p = cv2.boxFilter(src_f32, cv2.CV_32F, ksize)
-    corr_i = cv2.boxFilter(guide_gray_f32 * guide_gray_f32, cv2.CV_32F, ksize)
-    corr_ip = cv2.boxFilter(guide_gray_f32 * src_f32, cv2.CV_32F, ksize)
-    var_i = np.maximum(0.0, corr_i - mean_i * mean_i)
-    cov_ip = corr_ip - mean_i * mean_p
-    a = cov_ip / (var_i + eps)
-    b = mean_p - a * mean_i
-    mean_a = cv2.boxFilter(a, cv2.CV_32F, ksize)
+    r = guide_rgb_f32[:, :, 0]
+    g = guide_rgb_f32[:, :, 1]
+    b = guide_rgb_f32[:, :, 2]
+
+    mean_r = cv2.boxFilter(r, cv2.CV_32F, ksize)
+    mean_g = cv2.boxFilter(g, cv2.CV_32F, ksize)
     mean_b = cv2.boxFilter(b, cv2.CV_32F, ksize)
-    return np.clip(mean_a * guide_gray_f32 + mean_b, 0.0, 1.0)
+    mean_p = cv2.boxFilter(src_f32, cv2.CV_32F, ksize)
+
+    cov_rp = cv2.boxFilter(r * src_f32, cv2.CV_32F, ksize) - mean_r * mean_p
+    cov_gp = cv2.boxFilter(g * src_f32, cv2.CV_32F, ksize) - mean_g * mean_p
+    cov_bp = cv2.boxFilter(b * src_f32, cv2.CV_32F, ksize) - mean_b * mean_p
+
+    v_rr = cv2.boxFilter(r * r, cv2.CV_32F, ksize) - mean_r * mean_r + eps
+    v_rg = cv2.boxFilter(r * g, cv2.CV_32F, ksize) - mean_r * mean_g
+    v_rb = cv2.boxFilter(r * b, cv2.CV_32F, ksize) - mean_r * mean_b
+    v_gg = cv2.boxFilter(g * g, cv2.CV_32F, ksize) - mean_g * mean_g + eps
+    v_gb = cv2.boxFilter(g * b, cv2.CV_32F, ksize) - mean_g * mean_b
+    v_bb = cv2.boxFilter(b * b, cv2.CV_32F, ksize) - mean_b * mean_b + eps
+
+    c_rr = v_gg * v_bb - v_gb * v_gb
+    c_rg = v_gb * v_rb - v_rg * v_bb
+    c_rb = v_rg * v_gb - v_gg * v_rb
+    c_gg = v_rr * v_bb - v_rb * v_rb
+    c_gb = v_rb * v_rg - v_rr * v_gb
+    c_bb = v_rr * v_gg - v_rg * v_rg
+
+    det = v_rr * c_rr + v_rg * c_rg + v_rb * c_rb
+    inv_det = 1.0 / np.maximum(det, 1e-12)
+
+    a_r = (c_rr * cov_rp + c_rg * cov_gp + c_rb * cov_bp) * inv_det
+    a_g = (c_rg * cov_rp + c_gg * cov_gp + c_gb * cov_bp) * inv_det
+    a_b = (c_rb * cov_rp + c_gb * cov_gp + c_bb * cov_bp) * inv_det
+
+    b_term = mean_p - a_r * mean_r - a_g * mean_g - a_b * mean_b
+
+    mean_ar = cv2.boxFilter(a_r, cv2.CV_32F, ksize)
+    mean_ag = cv2.boxFilter(a_g, cv2.CV_32F, ksize)
+    mean_ab = cv2.boxFilter(a_b, cv2.CV_32F, ksize)
+    mean_bt = cv2.boxFilter(b_term, cv2.CV_32F, ksize)
+
+    return np.clip(mean_ar * r + mean_ag * g + mean_ab * b + mean_bt, 0.0, 1.0)
 
 
 def refine_alpha(alpha_f32, guide_rgb_u8, edge_refine=0, guided=True):
     a = np.clip(alpha_f32, 0.0, 1.0).astype(np.float32)
     if guided:
-        gray = (
-            0.299 * guide_rgb_u8[:, :, 0]
-            + 0.587 * guide_rgb_u8[:, :, 1]
-            + 0.114 * guide_rgb_u8[:, :, 2]
-        ).astype(np.float32) / 255.0
-        g_out = fast_guided_filter(gray, a, radius=4, eps=5e-4)
-        # Preserve interior opacity while aligning semi-transparent boundaries to edges
-        edge_band = ((a > 0.03) & (a < 0.97)).astype(np.float32)
+        rgb_f = guide_rgb_u8.astype(np.float32) / 255.0
+        g_out = color_guided_filter(rgb_f, a, radius=5, eps=1.5e-4)
+        # Preserve interior opacity while snapping semi-transparent boundaries to RGB edges
+        edge_band = ((a > 0.02) & (a < 0.98)).astype(np.float32)
         edge_band = cv2.GaussianBlur(edge_band, (5, 5), 0)
-        a = a * (1.0 - edge_band * 0.65) + g_out * (edge_band * 0.65)
+        a = a * (1.0 - edge_band * 0.72) + g_out * (edge_band * 0.72)
 
     er = int(round(edge_refine))
     if er != 0:
@@ -86,19 +114,77 @@ def refine_alpha(alpha_f32, guide_rgb_u8, edge_refine=0, guided=True):
     return np.clip(a, 0.0, 1.0)
 
 
-def decontaminate_foreground(rgb_u8, alpha_f32, fgr_u8=None):
+def decontaminate_foreground(rgb_u8, alpha_f32, fgr_u8=None, fast_video=False):
     if fgr_u8 is not None:
         return fgr_u8
-    band = (alpha_f32 > 0.02) & (alpha_f32 < 0.94)
+    band = (alpha_f32 > 0.01) & (alpha_f32 < 0.96)
     if not np.any(band):
         return rgb_u8
-    solid = (alpha_f32 >= 0.94).astype(np.float32)
-    rgb_f = rgb_u8.astype(np.float32)
-    num = cv2.GaussianBlur(rgb_f * solid[..., None], (15, 15), 0)
-    den = cv2.GaussianBlur(solid, (15, 15), 0)[..., None]
-    pure_fg = np.where(den > 1e-4, num / np.maximum(den, 1e-4), rgb_f)
-    out = np.where(band[..., None], pure_fg, rgb_f)
-    return np.clip(out, 0, 255).astype(np.uint8)
+
+    if fast_video:
+        solid = (alpha_f32 >= 0.94).astype(np.float32)
+        rgb_f = rgb_u8.astype(np.float32)
+        num = cv2.GaussianBlur(rgb_f * solid[..., None], (15, 15), 0)
+        den = cv2.GaussianBlur(solid, (15, 15), 0)[..., None]
+        pure_fg = np.where(den > 1e-4, num / np.maximum(den, 1e-4), rgb_f)
+        out = np.where(band[..., None], pure_fg, rgb_f)
+        return np.clip(out, 0, 255).astype(np.uint8)
+
+    # Multi-Level Fast Foreground Estimation (Forte & Pitie / Germer et al.)
+    img = rgb_u8.astype(np.float32) / 255.0
+    alpha = np.clip(alpha_f32, 0.0, 1.0).astype(np.float32)
+    h, w = alpha.shape
+    min_dim = 32
+    levels = []
+    cw, ch = w, h
+    while max(cw, ch) > min_dim:
+        levels.append((cw, ch))
+        cw = max(min_dim, cw // 2)
+        ch = max(min_dim, ch // 2)
+    levels.append((cw, ch))
+    levels.reverse()
+
+    F = None
+    B = None
+    eps = 1e-4
+    r = 15
+    for idx, (lw, lh) in enumerate(levels):
+        img_l = cv2.resize(img, (lw, lh), interpolation=cv2.INTER_AREA) if (lw != w or lh != h) else img
+        a_l = cv2.resize(alpha, (lw, lh), interpolation=cv2.INTER_AREA) if (lw != w or lh != h) else alpha
+        if F is None:
+            F = img_l.copy()
+            B = img_l.copy()
+        else:
+            F = cv2.resize(F, (lw, lh), interpolation=cv2.INTER_LINEAR)
+            B = cv2.resize(B, (lw, lh), interpolation=cv2.INTER_LINEAR)
+
+        ksize = max(3, min(r, max(3, min(lw, lh) // 4)) | 1)
+        iters = 4 if idx < len(levels) - 1 else 3
+        a2 = a_l * a_l
+        oma = 1.0 - a_l
+        oma2 = oma * oma
+        a_oma = a_l * oma
+        wf = a2 + 1e-4
+        wb = oma2 + 1e-4
+        wf_den = np.maximum(cv2.blur(wf, (ksize, ksize)), 1e-6)[..., None]
+        wb_den = np.maximum(cv2.blur(wb, (ksize, ksize)), 1e-6)[..., None]
+
+        for _ in range(iters):
+            F_bar = cv2.blur(F * wf[..., None], (ksize, ksize)) / wf_den
+            B_bar = cv2.blur(B * wb[..., None], (ksize, ksize)) / wb_den
+            reg = 0.05
+            d00 = a2 + reg
+            d11 = oma2 + reg
+            d01 = a_oma
+            det = np.maximum(d00 * d11 - d01 * d01, eps)
+            rhs_f = a_l[..., None] * img_l + reg * F_bar
+            rhs_b = oma[..., None] * img_l + reg * B_bar
+            F = np.clip((d11[..., None] * rhs_f - d01[..., None] * rhs_b) / det[..., None], 0.0, 1.0)
+            B = np.clip((d00[..., None] * rhs_b - d01[..., None] * rhs_f) / det[..., None], 0.0, 1.0)
+
+    band_f = cv2.GaussianBlur(band.astype(np.float32), (3, 3), 0)[..., None]
+    out = img * (1.0 - band_f) + F * band_f
+    return np.clip(out * 255.0, 0, 255).astype(np.uint8)
 
 
 def compose_output_frame(rgb_u8, alpha_f32, backdrop, bg_color_rgb, blur_strength, custom_bg_rgb=None, fgr_u8=None, decontaminate=True):
@@ -148,15 +234,114 @@ def run_birefnet_frame(sess, inp_name, rgb_u8):
     return cv2.resize(pred, (w, h), interpolation=cv2.INTER_CUBIC)
 
 
+def load_birefnet_hr_cuda(model_dir):
+    """Load ZhengPeng7/BiRefNet_HR-matting directly from local safetensors onto CUDA FP16 (zero timm/HF cache)."""
+    import importlib.machinery
+    import importlib.util
+    import types
+    import torch
+    import torch.nn as nn
+    from safetensors.torch import load_file
+
+    if "timm.layers" not in sys.modules:
+        class _DropPath(nn.Module):
+            def __init__(self, drop_prob=0.0, scale_by_keep=True):
+                super().__init__()
+                self.drop_prob = drop_prob
+
+            def forward(self, x):
+                return x
+
+        def _to_2tuple(x):
+            return x if isinstance(x, (tuple, list)) else (x, x)
+
+        def _trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0):
+            return nn.init.trunc_normal_(tensor, mean=mean, std=std, a=a, b=b)
+
+        timm_mod = types.ModuleType("timm")
+        timm_mod.__spec__ = importlib.machinery.ModuleSpec("timm", None)
+        timm_mod.__path__ = []
+        layers_mod = types.ModuleType("timm.layers")
+        layers_mod.__spec__ = importlib.machinery.ModuleSpec("timm.layers", None)
+        layers_mod.DropPath = _DropPath
+        layers_mod.to_2tuple = _to_2tuple
+        layers_mod.trunc_normal_ = _trunc_normal_
+        timm_mod.layers = layers_mod
+        sys.modules["timm"] = timm_mod
+        sys.modules["timm.layers"] = layers_mod
+
+    pkg_name = "kaptura_birefnet_hr_pkg"
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [model_dir]
+        pkg.__package__ = pkg_name
+        pkg.__spec__ = importlib.machinery.ModuleSpec(pkg_name, None, is_package=True)
+        sys.modules[pkg_name] = pkg
+
+    cfg_spec = importlib.util.spec_from_file_location(f"{pkg_name}.BiRefNet_config", os.path.join(model_dir, "BiRefNet_config.py"))
+    cfg_mod = importlib.util.module_from_spec(cfg_spec)
+    cfg_mod.__package__ = pkg_name
+    sys.modules[f"{pkg_name}.BiRefNet_config"] = cfg_mod
+    cfg_spec.loader.exec_module(cfg_mod)
+
+    spec = importlib.util.spec_from_file_location(f"{pkg_name}.birefnet", os.path.join(model_dir, "birefnet.py"))
+    mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = pkg_name
+    sys.modules[f"{pkg_name}.birefnet"] = mod
+    spec.loader.exec_module(mod)
+
+    with open(os.path.join(model_dir, "config.json"), "r", encoding="utf-8") as fh:
+        cfg_dict = json.load(fh)
+    cfg = cfg_mod.BiRefNetConfig(**{k: v for k, v in cfg_dict.items() if k in ("bb_pretrained", "is_pretrained") or not k.startswith("_")})
+    cfg.bb_pretrained = False
+    model = mod.BiRefNet(cfg)
+    state = load_file(os.path.join(model_dir, "model.safetensors"), device="cpu")
+    model.load_state_dict(state, strict=False)
+    model.eval().to("cuda").half()
+    return torch, model
+
+
+def run_birefnet_hr_frame(torch_mod, model, rgb_u8, max_dim=2048):
+    """Aspect-ratio-preserving high-resolution BiRefNet HR-matting inference in CUDA FP16."""
+    h, w = rgb_u8.shape[:2]
+    # Pick target resolution up to max_dim (minimum 1024 on longest side, multiple of 32)
+    longest = max(w, h)
+    if longest >= 1600 and max_dim >= 2048:
+        target_long = 2048
+    elif longest >= 1100 and max_dim >= 1536:
+        target_long = 1536
+    else:
+        target_long = min(max_dim, 1024)
+    scale = target_long / max(1, longest)
+    tw = max(256, int(round((w * scale) / 32.0)) * 32)
+    th = max(256, int(round((h * scale) / 32.0)) * 32)
+
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+    resized = cv2.resize(rgb_u8, (tw, th), interpolation=interp)
+    mean = torch_mod.tensor([0.485, 0.456, 0.406], device="cuda", dtype=torch_mod.float16).view(1, 3, 1, 1)
+    std = torch_mod.tensor([0.229, 0.224, 0.225], device="cuda", dtype=torch_mod.float16).view(1, 3, 1, 1)
+    with torch_mod.no_grad():
+        x = (
+            torch_mod.from_numpy(resized.copy())
+            .to(device="cuda", dtype=torch_mod.float16)
+            .permute(2, 0, 1)
+            .unsqueeze(0)
+            / 255.0
+        )
+        x = (x - mean) / std
+        preds = model(x)
+        out = preds[-1].sigmoid() if isinstance(preds, (list, tuple)) else preds.sigmoid()
+        pred = out[0, 0].float().cpu().numpy()
+    return cv2.resize(pred, (w, h), interpolation=cv2.INTER_CUBIC)
+
+
 def compute_downsample_ratio(w, h):
     max_dim = max(w, h)
     if max_dim >= 3200:
-        return 0.16
-    if max_dim >= 1800:
         return 0.25
-    if max_dim >= 1100:
+    if max_dim >= 1800:
         return 0.375
-    if max_dim >= 600:
+    if max_dim >= 1100:
         return 0.5
     return 1.0
 
@@ -179,20 +364,31 @@ def run_image(args):
         if cbgr is not None:
             custom_bg = cover_resize_rgb(cv2.cvtColor(cbgr, cv2.COLOR_BGR2RGB), w, h)
 
-    sess = create_ort_session(args.model)
-    emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine})
-
     fgr_u8 = None
-    if args.engine == "birefnet":
-        inp_name = sess.get_inputs()[0].name
-        raw_alpha = run_birefnet_frame(sess, inp_name, rgb)
+    if args.engine == "birefnet_hr":
+        torch_mod, hr_model = load_birefnet_hr_cuda(args.model)
+        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine})
+        try:
+            raw_alpha = run_birefnet_hr_frame(torch_mod, hr_model, rgb, max_dim=2048)
+        finally:
+            try:
+                del hr_model
+                torch_mod.cuda.empty_cache()
+            except Exception:
+                pass
     else:
-        src = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
-        rec = [np.zeros([1, 1, 1, 1], dtype=np.float32)] * 4
-        ds = np.array([compute_downsample_ratio(w, h)], dtype=np.float32)
-        fgr, pha, *_ = sess.run(None, {"src": src, "r1i": rec[0], "r2i": rec[1], "r3i": rec[2], "r4i": rec[3], "downsample_ratio": ds})
-        raw_alpha = np.squeeze(pha).astype(np.float32)
-        fgr_u8 = np.clip(np.squeeze(fgr).transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
+        sess = create_ort_session(args.model)
+        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine})
+        if args.engine == "birefnet":
+            inp_name = sess.get_inputs()[0].name
+            raw_alpha = run_birefnet_frame(sess, inp_name, rgb)
+        else:
+            src = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
+            rec = [np.zeros([1, 1, 1, 1], dtype=np.float32)] * 4
+            ds = np.array([compute_downsample_ratio(w, h)], dtype=np.float32)
+            fgr, pha, *_ = sess.run(None, {"src": src, "r1i": rec[0], "r2i": rec[1], "r3i": rec[2], "r4i": rec[3], "downsample_ratio": ds})
+            raw_alpha = np.squeeze(pha).astype(np.float32)
+            fgr_u8 = np.clip(np.squeeze(fgr).transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
 
     emit({"stage": "BG_COMPOSITE", "progress": 82, "engine": args.engine})
     alpha = refine_alpha(raw_alpha, rgb, edge_refine=args.edge_refine, guided=True)
@@ -268,6 +464,7 @@ def run_video(args):
             custom_bg = cover_resize_rgb(cv2.cvtColor(cbgr, cv2.COLOR_BGR2RGB), w, h)
 
     use_cuda = args.engine == "rvm_cuda"
+    use_birefnet_hr = args.engine == "birefnet_hr"
     use_birefnet = args.engine == "birefnet"
     ds_val = compute_downsample_ratio(w, h)
 
@@ -284,6 +481,8 @@ def run_video(args):
         torch_mod = torch
         device = torch.device("cuda")
         torch_model = torch.jit.load(args.model, map_location=device).eval()
+    elif use_birefnet_hr:
+        torch_mod, torch_model = load_birefnet_hr_cuda(args.model)
     else:
         ort_sess = create_ort_session(args.model)
         if use_birefnet:
@@ -323,6 +522,10 @@ def run_video(args):
                         .unsqueeze(0)
                         / 255.0
                     )
+                    # Temporal pre-warmup on frame 0 so recurrent states stabilize before emitting frame 0
+                    if frame_idx == 0:
+                        for _ in range(3):
+                            _, _, *cuda_rec = torch_model(src_t, *cuda_rec, downsample_ratio=ds_val)
                     fgr_t, pha_t, *cuda_rec = torch_model(src_t, *cuda_rec, downsample_ratio=ds_val)
                     alpha_raw = pha_t[0, 0].float().cpu().numpy()
                     fgr_u8 = (
@@ -334,6 +537,8 @@ def run_video(args):
                         .cpu()
                         .numpy()
                     )
+            elif use_birefnet_hr:
+                alpha_raw = run_birefnet_hr_frame(torch_mod, torch_model, rgb, max_dim=1280)
             elif use_birefnet:
                 alpha_raw = run_birefnet_frame(ort_sess, ort_inp_name, rgb)
             else:
@@ -345,7 +550,7 @@ def run_video(args):
                 alpha_raw = np.squeeze(pha).astype(np.float32)
                 fgr_u8 = np.clip(np.squeeze(fgr).transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
 
-            alpha = refine_alpha(alpha_raw, rgb, edge_refine=args.edge_refine, guided=(not use_cuda))
+            alpha = refine_alpha(alpha_raw, rgb, edge_refine=args.edge_refine, guided=True)
             out_frame = compose_output_frame(
                 rgb,
                 alpha,
@@ -386,7 +591,7 @@ def run_video(args):
             pass
         dec_ret = dec_proc.wait(timeout=30)
         enc_ret = enc_proc.wait(timeout=120)
-        if use_cuda and torch_mod is not None:
+        if (use_cuda or use_birefnet_hr) and torch_mod is not None:
             try:
                 del torch_model, cuda_rec
                 torch_mod.cuda.empty_cache()
@@ -405,7 +610,7 @@ def run_video(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--mode", required=True, choices=["image", "video"])
-    p.add_argument("--engine", required=True, choices=["birefnet", "rvm_cuda", "rvm_onnx"])
+    p.add_argument("--engine", required=True, choices=["birefnet_hr", "birefnet", "rvm_cuda", "rvm_onnx"])
     p.add_argument("--input", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--model", required=True)

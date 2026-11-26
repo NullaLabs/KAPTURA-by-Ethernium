@@ -48,13 +48,19 @@ function resolveBgSelection(requestedEngine, isImage, previewSec, bg) {
     if (req === "rvm_cuda") {
       return { errorStatus: "invalid_mode_for_image", error: "RVM CUDA es un motor temporal exclusivo de vídeo." };
     }
+    if ((req === "auto" || req === "birefnet_hr") && bg.birefnetHr) {
+      return { engine: "birefnet_hr", pyBin: bg.cudaPython, modelPath: bg.birefnetHrDir };
+    }
+    if (req === "birefnet_hr" && bg.birefnet) {
+      return { engine: "birefnet", pyBin: bg.onnxPython, modelPath: bg.birefnetModel };
+    }
     if ((req === "auto" || req === "birefnet") && bg.birefnet) {
       return { engine: "birefnet", pyBin: bg.onnxPython, modelPath: bg.birefnetModel };
     }
     if ((req === "auto" || req === "rvm_onnx") && bg.rvmOnnx) {
       return { engine: "rvm_onnx", pyBin: bg.onnxPython, modelPath: bg.rvmOnnxModel };
     }
-    if (req === "birefnet" || req === "rvm_onnx" || req === "auto") {
+    if (req === "birefnet_hr" || req === "birefnet" || req === "rvm_onnx" || req === "auto") {
       return {
         errorStatus: "bg_model_unavailable",
         error: "Modelos neuronales de BG Studio (BiRefNet / RVM ONNX) no instalados. Ejecuta `npm run setup:neural` o usa Chroma-Key.",
@@ -70,11 +76,17 @@ function resolveBgSelection(requestedEngine, isImage, previewSec, bg) {
     }
     if (bg.rvmCuda) return { engine: "rvm_cuda", pyBin: bg.cudaPython, modelPath: bg.rvmTorchModel };
     if (bg.rvmOnnx) return { engine: "rvm_onnx", pyBin: bg.onnxPython, modelPath: bg.rvmOnnxModel };
+    if (bg.birefnetHr) return { engine: "birefnet_hr", pyBin: bg.cudaPython, modelPath: bg.birefnetHrDir };
     if (bg.birefnet) return { engine: "birefnet", pyBin: bg.onnxPython, modelPath: bg.birefnetModel };
     return {
       errorStatus: "bg_model_unavailable",
       error: "Modelos neuronales de vídeo (RVM CUDA / ONNX) no detectados. Ejecuta `npm run setup:neural` o usa Chroma-Key.",
     };
+  }
+  if (req === "birefnet_hr") {
+    return bg.birefnetHr
+      ? { engine: "birefnet_hr", pyBin: bg.cudaPython, modelPath: bg.birefnetHrDir }
+      : { errorStatus: "bg_model_unavailable", error: "BiRefNet HR-Matting 2K CUDA no disponible en este host." };
   }
   if (req === "rvm_cuda") {
     return bg.rvmCuda

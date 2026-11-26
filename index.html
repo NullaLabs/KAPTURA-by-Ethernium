@@ -535,7 +535,7 @@
       <div class="engine-kicker" style="color:var(--emerald)">NEURAL MATTING + CHROMA STUDIO · ZERO CLOUD</div>
       <h2 class="engine-title">BG STUDIO <span style="color:var(--cyan)">by Ethernium</span></h2>
       <p class="engine-copy">
-        Eliminación de fondos de precisión para <strong>imágenes (BiRefNet 1024px + Guided Filter + Anti-Halo)</strong> y <strong>vídeos (RVM ResNet-50 RTX CUDA temporal sin parpadeo / FFmpeg Chroma-Key + Despill GPU)</strong>.
+        Eliminación de fondos de precisión para <strong>imágenes (BiRefNet HR-Matting 2K CUDA + Color Guided Filter RGB + Descontaminación Multi-Nivel)</strong> y <strong>vídeos (RVM ResNet-50 RTX CUDA con warmup temporal / BiRefNet 2K / FFmpeg Chroma-Key GPU)</strong>.
         Exporta en PNG RGBA transparente, WebM VP9 Alpha (<code>yuva420p</code>), ProRes 4444 Alpha, Bokeh DSLR o fondo personalizado.
       </p>
 
@@ -556,8 +556,9 @@
         <div class="control-card">
           <div class="control-label">MOTOR IA / CHROMA</div>
           <select id="bgEngineSelect">
-            <option value="auto" selected>⚡ Auto Studio (BiRefNet Img / RVM RTX Vid)</option>
-            <option value="birefnet">💎 BiRefNet Ultra HD (1024px · Cabello/Objetos)</option>
+            <option value="auto" selected>⚡ Auto Studio (BiRefNet 2K CUDA Img / RVM RTX Vid)</option>
+            <option value="birefnet_hr">💎 BiRefNet HR-Matting 2K (RTX CUDA · Máxima Precisión)</option>
+            <option value="birefnet">🔹 BiRefNet 1024px ONNX (CPU/Portátil)</option>
             <option value="rvm_cuda">🎬 RVM ResNet-50 RTX CUDA (60 FPS · Vídeo)</option>
             <option value="rvm_onnx">🧠 RVM Fast Neural (Retratos / Preview 2s)</option>
             <option value="chroma">🟩 Chroma-Key + Despill (Verde/Azul/Color)</option>

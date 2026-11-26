@@ -11,11 +11,12 @@
   'use strict';
 
   const ENGINES = {
-    auto:     { label: '⚡ Auto Studio (BiRefNet Img / RVM RTX Vid)', media: 'both' },
-    birefnet: { label: '💎 BiRefNet Ultra HD (1024px · Cabello/Objetos)', media: 'both' },
-    rvm_cuda: { label: '🎬 RVM ResNet-50 RTX CUDA (60 FPS · Sin parpadeo)', media: 'video' },
-    rvm_onnx: { label: '🧠 RVM Fast Neural (Retratos / Preview 2s)', media: 'both' },
-    chroma:   { label: '🟩 Chroma-Key + Despill (Verde/Azul/Color)', media: 'both' },
+    auto:        { label: '⚡ Auto Studio (BiRefNet 2K CUDA Img / RVM RTX Vid)', media: 'both' },
+    birefnet_hr: { label: '💎 BiRefNet HR-Matting 2K (RTX CUDA · Máxima Precisión)', media: 'both' },
+    birefnet:    { label: '🔹 BiRefNet 1024px ONNX (CPU/Portátil)', media: 'both' },
+    rvm_cuda:    { label: '🎬 RVM ResNet-50 RTX CUDA (60 FPS · Sin parpadeo)', media: 'video' },
+    rvm_onnx:    { label: '🧠 RVM Fast Neural (Retratos / Preview 2s)', media: 'both' },
+    chroma:      { label: '🟩 Chroma-Key + Despill (Verde/Azul/Color)', media: 'both' },
   };
 
   const BACKDROPS = {
@@ -366,8 +367,8 @@
     const dh = root.KapturaDaemon && root.KapturaDaemon.getCachedHealth ? root.KapturaDaemon.getCachedHealth() : {};
     const bgCaps = (dh && dh.bgRemoval) || {};
     const hasAnyNeural = isImg
-      ? Boolean(bgCaps.birefnet || bgCaps.rvmOnnx)
-      : Boolean(bgCaps.rvmCuda || bgCaps.rvmOnnx || bgCaps.birefnet);
+      ? Boolean(bgCaps.birefnetHr || bgCaps.birefnet || bgCaps.rvmOnnx)
+      : Boolean(bgCaps.rvmCuda || bgCaps.birefnetHr || bgCaps.rvmOnnx || bgCaps.birefnet);
     const daemonOnline = Boolean(root.KapturaDaemon && root.KapturaDaemon.isReadyForTranscode && root.KapturaDaemon.isReadyForTranscode());
 
     const canUseDaemon = daemonOnline && (engine === 'chroma' || hasAnyNeural);

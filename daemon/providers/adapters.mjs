@@ -134,10 +134,17 @@ export function resolveBgRuntimes(forceRefresh = false) {
   const birefnetModel = pickFile("BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx");
   const rvmTorchModel = pickFile("rvm_resnet50_fp16.torchscript");
   const rvmOnnxModel = pickFile("rvm_mobilenetv3_fp32.onnx");
+  const birefnetHrCandidate = modelsDir ? join(modelsDir, "BiRefNet_HR-matting") : null;
+  const birefnetHrDir =
+    birefnetHrCandidate &&
+    existsSync(join(birefnetHrCandidate, "model.safetensors")) &&
+    existsSync(join(birefnetHrCandidate, "birefnet.py"))
+      ? birefnetHrCandidate
+      : null;
 
   let onnxPython = null;
   let cudaPython = null;
-  if (birefnetModel || rvmTorchModel || rvmOnnxModel) {
+  if (birefnetModel || birefnetHrDir || rvmTorchModel || rvmOnnxModel) {
     const pyCandidates = [
       process.env.ETHERNIUM_CUDA_PYTHON,
       process.env.ETHERNIUM_ONNX_PYTHON,
@@ -162,9 +169,11 @@ export function resolveBgRuntimes(forceRefresh = false) {
     onnxPython,
     cudaPython,
     birefnetModel,
+    birefnetHrDir,
     rvmTorchModel,
     rvmOnnxModel,
     birefnet: Boolean(birefnetModel && onnxPython),
+    birefnetHr: Boolean(birefnetHrDir && cudaPython),
     rvmCuda: Boolean(rvmTorchModel && cudaPython),
     rvmOnnx: Boolean(rvmOnnxModel && onnxPython),
   };
@@ -186,6 +195,7 @@ export function getCompanionStatus() {
     rife: Boolean(rifePath),
     bgRemoval: {
       birefnet: bg.birefnet,
+      birefnetHr: bg.birefnetHr,
       rvmCuda: bg.rvmCuda,
       rvmOnnx: bg.rvmOnnx,
       chromaGpu: true,
