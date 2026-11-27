@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectVideoBackend, getOptimalGpuEncoderParams } from "./gpuDirectOptimizer.mjs";
 import { getCompanionStatus, resolveBgRuntimes } from "../providers/adapters.mjs";
+import { runWarmJob } from "./bgWarmWorker.mjs";
 import {
   registerTask,
   unregisterTask,
@@ -244,6 +245,9 @@ export async function removeBgTask({
   codec = "auto",
   previewSec = 0,
   previewStartSec = 0,
+  precision = "max",
+  lightWrap = 0,
+  harmonize = 0,
   taskId: providedTaskId = "",
   onProgress,
 }) {
@@ -408,24 +412,54 @@ export async function removeBgTask({
       "--height", String(h),
       "--total-frames", String(estFrames),
       "--has-audio", srcMeta.hasAudio ? "1" : "0",
+      "--precision", precision === "standard" ? "standard" : "max",
+      "--light-wrap", String(Math.max(0, Math.min(100, Math.round(Number(lightWrap) || 0)))),
+      "--harmonize", String(Math.max(0, Math.min(100, Math.round(Number(harmonize) || 0)))),
     ];
     if (bgImagePath && fs.existsSync(bgImagePath)) {
       pyArgs.push("--bg-image", bgImagePath);
     }
 
-    const workerRes = await runProcessArgs(sel.pyBin, pyArgs, path.dirname(WORKER_SCRIPT), {
-      taskId,
-      stallTimeoutMs: 120_000,
-      onOutputLine: (line) => {
-        if (typeof onProgress !== "function") return;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed && typeof parsed === "object") {
-            onProgress({ taskId, ...parsed });
-          }
-        } catch { /* ignore non-JSON stderr info */ }
-      },
-    });
+    const forwardLine = (parsed) => {
+      if (typeof onProgress !== "function" || !parsed || typeof parsed !== "object") return;
+      const { jobId: _ignored, ...rest } = parsed;
+      onProgress({ taskId, ...rest });
+    };
+
+    let workerRes = null;
+    let usedWarm = false;
+    if (isImage) {
+      // Warm GPU worker: models stay resident between cutouts (cold load paid once)
+      const warmRes = await runWarmJob({
+        pyBin: sel.pyBin,
+        workerScript: WORKER_SCRIPT,
+        argv: pyArgs.slice(1),
+        jobId: taskId,
+        onLine: forwardLine,
+        isAborted: () => isTaskAborted(taskId),
+        timeoutMs: 180_000,
+      });
+      if (warmRes.ok || warmRes.aborted || warmRes.timedOut) {
+        usedWarm = Boolean(warmRes.warm);
+        workerRes = {
+          code: warmRes.ok ? 0 : 1,
+          aborted: Boolean(warmRes.aborted),
+          stalled: Boolean(warmRes.timedOut),
+          stderr: warmRes.error || "",
+          stdout: "",
+        };
+      }
+    }
+
+    if (!workerRes) {
+      workerRes = await runProcessArgs(sel.pyBin, pyArgs, path.dirname(WORKER_SCRIPT), {
+        taskId,
+        stallTimeoutMs: 120_000,
+        onOutputLine: (line) => {
+          try { forwardLine(JSON.parse(line)); } catch { /* ignore non-JSON stderr info */ }
+        },
+      });
+    }
 
     if (workerRes.aborted || isTaskAborted(taskId)) {
       try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
@@ -453,6 +487,10 @@ export async function removeBgTask({
       taskId,
       engine: sel.engine,
       model: path.basename(sel.modelPath),
+      warmWorker: usedWarm,
+      precision: precision === "standard" ? "standard" : "max",
+      lightWrap: Number(lightWrap) || 0,
+      harmonize: Number(harmonize) || 0,
       backdrop,
       isImage,
       hasAlpha: backdrop === "transparent" || backdrop === "prores",

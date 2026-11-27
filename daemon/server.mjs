@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderVideoTask, transcodeMediaTask, trimMediaTask, upscaleAiTask, probeMediaMeta, estimateProfileEtas, cancelTask, createLiveCaptureSession } from "./pipeline/videoPipeline.mjs";
 import { removeBgTask } from "./pipeline/bgRemovePipeline.mjs";
+import { releaseWarmWorkers, getWarmWorkerStatus } from "./pipeline/bgWarmWorker.mjs";
 import { detectVideoBackend, probeGpuTelemetry } from "./pipeline/gpuDirectOptimizer.mjs";
 import { getCompanionStatus } from "./providers/adapters.mjs";
 import { ebwpProtocol, EBWP_OPCODES } from "./synkronia/ebwpProtocol.mjs";
@@ -288,6 +289,7 @@ export function createKapturaDaemon({
         encoders: backend.encoders,
       },
       gpu: probeGpuTelemetry(),
+      warmWorkers: getWarmWorkerStatus(),
       streaming: {
         wsCapture: "/ws/capture",
         sseEvents: "/events",
@@ -335,7 +337,7 @@ export function createKapturaDaemon({
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Codec, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Preview-Sec, X-Kaptura-Preview-Start, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode, X-Kaptura-Async, X-Kaptura-Bg-Engine, X-Kaptura-Bg-Backdrop, X-Kaptura-Bg-Color, X-Kaptura-Bg-Blur, X-Kaptura-Bg-Edge, X-Kaptura-Bg-Decontaminate, X-Kaptura-Bg-Key-Color, X-Kaptura-Bg-Similarity, X-Kaptura-Bg-Blend, X-Kaptura-Bg-Image-Ref"
+      "Content-Type, Range, Accept, X-Kaptura-Ext, X-Kaptura-Container, X-Kaptura-Codec, X-Kaptura-Width, X-Kaptura-Height, X-Kaptura-Fps, X-Kaptura-Bitrate, X-Kaptura-Target-MB, X-Kaptura-Quality, X-Kaptura-Sharpen, X-Kaptura-Cfr, X-Kaptura-Ai-Model, X-Kaptura-Scale, X-Kaptura-Denoise, X-Kaptura-Pipeline, X-Kaptura-Rife-Mult, X-Kaptura-Start-Sec, X-Kaptura-End-Sec, X-Kaptura-Preview-Sec, X-Kaptura-Preview-Start, X-Kaptura-Task-Id, X-Kaptura-Source-Export, X-Kaptura-Reencode, X-Kaptura-Async, X-Kaptura-Bg-Engine, X-Kaptura-Bg-Backdrop, X-Kaptura-Bg-Color, X-Kaptura-Bg-Blur, X-Kaptura-Bg-Edge, X-Kaptura-Bg-Decontaminate, X-Kaptura-Bg-Key-Color, X-Kaptura-Bg-Similarity, X-Kaptura-Bg-Blend, X-Kaptura-Bg-Image-Ref, X-Kaptura-Bg-Precision, X-Kaptura-Bg-Light-Wrap, X-Kaptura-Bg-Harmonize"
     );
     res.setHeader(
       "Access-Control-Expose-Headers",
@@ -863,6 +865,9 @@ export function createKapturaDaemon({
           codec: String(h["x-kaptura-codec"] || url.searchParams.get("codec") || "auto"),
           previewSec: Number(h["x-kaptura-preview-sec"] || url.searchParams.get("previewSec") || 0),
           previewStartSec: Number(h["x-kaptura-preview-start"] || url.searchParams.get("previewStart") || 0),
+          precision: String(h["x-kaptura-bg-precision"] || url.searchParams.get("precision") || "max"),
+          lightWrap: Number(h["x-kaptura-bg-light-wrap"] || url.searchParams.get("lightWrap") || 0),
+          harmonize: Number(h["x-kaptura-bg-harmonize"] || url.searchParams.get("harmonize") || 0),
           taskId,
           onProgress: emitProgressEvent,
         };
@@ -1027,6 +1032,7 @@ export function createKapturaDaemon({
           const tmpToClean = uploadTmpPath;
           enqueueGpuJob(taskId, jobRec, async () => {
             try {
+              releaseWarmWorkers();
               const result = await upscaleAiTask(taskParams);
               if (!result.success) {
                 Object.assign(jobRec, {
@@ -1063,6 +1069,7 @@ export function createKapturaDaemon({
 
         let result;
         try {
+          releaseWarmWorkers();
           result = await upscaleAiTask(taskParams);
         } finally {
           if (uploadTmpPath) try { if (fs.existsSync(uploadTmpPath)) fs.unlinkSync(uploadTmpPath); } catch {}
@@ -1265,6 +1272,7 @@ export function createKapturaDaemon({
           }
         }
         saveJobsRegistry();
+        releaseWarmWorkers();
         for (const client of sseClients) {
           try { client.end(); } catch {}
         }

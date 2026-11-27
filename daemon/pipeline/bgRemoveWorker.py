@@ -18,7 +18,15 @@ import numpy as np
 
 
 def emit(payload):
+    if _CURRENT_JOB["id"] is not None:
+        payload = {**payload, "jobId": _CURRENT_JOB["id"]}
     print(json.dumps(payload, ensure_ascii=True), flush=True)
+
+
+# Warm-worker state: persistent model cache when running in --serve mode
+_CURRENT_JOB = {"id": None}
+_SERVE_MODE = {"on": False}
+_MODEL_CACHE = {}
 
 
 def parse_hex_rgb(hex_color):
@@ -187,7 +195,61 @@ def decontaminate_foreground(rgb_u8, alpha_f32, fgr_u8=None, fast_video=False):
     return np.clip(out * 255.0, 0, 255).astype(np.uint8)
 
 
-def compose_output_frame(rgb_u8, alpha_f32, backdrop, bg_color_rgb, blur_strength, custom_bg_rgb=None, fgr_u8=None, decontaminate=True):
+def harmonize_foreground(fg_u8, alpha_f32, bg_u8, strength, state=None):
+    """Photometric harmonization: adapt subject Lab statistics toward the destination backdrop.
+    Bounded shifts keep skin tones natural; `state` caches parameters across video frames (no flicker)."""
+    s = max(0.0, min(1.0, float(strength) / 100.0))
+    if s <= 0.0:
+        return fg_u8
+    params = state.get("harm") if isinstance(state, dict) else None
+    fg_lab = cv2.cvtColor(fg_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+    if params is None:
+        fmask = alpha_f32 > 0.85
+        if int(fmask.sum()) < 64:
+            return fg_u8
+        bg_lab = cv2.cvtColor(bg_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+        bw = np.clip(1.0 - alpha_f32, 0.0, 1.0)
+        if float(bw.sum()) < 64.0:
+            bw = np.ones_like(alpha_f32)
+        wsum = float(bw.sum())
+        mu_f = fg_lab[fmask].mean(axis=0)
+        sd_f = fg_lab[fmask].std(axis=0) + 1e-3
+        mu_b = (bg_lab * bw[..., None]).sum(axis=(0, 1)) / wsum
+        sd_b = np.sqrt((((bg_lab - mu_b) ** 2) * bw[..., None]).sum(axis=(0, 1)) / wsum) + 1e-3
+        l_ratio = float(np.clip(sd_b[0] / sd_f[0], 0.82, 1.22))
+        shift = mu_b - mu_f
+        shift[0] = float(np.clip(shift[0], -26.0, 26.0))
+        shift[1] = float(np.clip(shift[1], -12.0, 12.0))
+        shift[2] = float(np.clip(shift[2], -12.0, 12.0))
+        params = {"mu_l": float(mu_f[0]), "l_ratio": l_ratio, "shift": shift.astype(np.float32)}
+        if isinstance(state, dict):
+            state["harm"] = params
+    out = fg_lab.copy()
+    out[..., 0] = (fg_lab[..., 0] - params["mu_l"]) * (1.0 + (params["l_ratio"] - 1.0) * s) + params["mu_l"] + params["shift"][0] * s * 0.6
+    out[..., 1] = fg_lab[..., 1] + params["shift"][1] * s * 0.5
+    out[..., 2] = fg_lab[..., 2] + params["shift"][2] * s * 0.5
+    return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+
+def apply_light_wrap(comp_f32, alpha_f32, bg_u8, strength):
+    """Optical light wrap (compositing technique used in film VFX): bleeds blurred backdrop light
+    into the subject's semi-transparent rim with a screen blend so the cutout sits inside the scene."""
+    s = max(0.0, min(1.0, float(strength) / 100.0))
+    if s <= 0.0:
+        return comp_f32
+    h, w = alpha_f32.shape
+    rad = max(3, int(round(min(h, w) * 0.007)))
+    k = rad * 2 + 1
+    inv_blur = cv2.GaussianBlur(1.0 - alpha_f32, (k, k), 0)
+    wrap = np.clip(inv_blur * alpha_f32 * 1.6, 0.0, 1.0) * s
+    bg_glow = cv2.GaussianBlur(bg_u8.astype(np.float32), (k * 2 + 1, k * 2 + 1), 0) / 255.0
+    base = comp_f32 / 255.0
+    screen = 1.0 - (1.0 - base) * (1.0 - bg_glow)
+    out = base * (1.0 - wrap[..., None]) + screen * wrap[..., None]
+    return np.clip(out * 255.0, 0, 255)
+
+
+def compose_output_frame(rgb_u8, alpha_f32, backdrop, bg_color_rgb, blur_strength, custom_bg_rgb=None, fgr_u8=None, decontaminate=True, light_wrap=0, harmonize=0, state=None):
     fg = decontaminate_foreground(rgb_u8, alpha_f32, fgr_u8) if decontaminate else rgb_u8
     if backdrop in ("transparent", "prores"):
         a_u8 = np.clip(alpha_f32 * 255.0, 0, 255).astype(np.uint8)
@@ -206,8 +268,14 @@ def compose_output_frame(rgb_u8, alpha_f32, backdrop, bg_color_rgb, blur_strengt
         k = max(5, int(blur_strength) | 1)
         bg = cv2.GaussianBlur(rgb_u8, (k, k), 0)
 
+    # Greenscreen plates must stay neutral for NLE keying: never harmonize or wrap them
+    if backdrop != "greenscreen":
+        fg = harmonize_foreground(fg, alpha_f32, bg, harmonize, state)
+
     a = alpha_f32[..., None]
     comp = fg.astype(np.float32) * a + bg.astype(np.float32) * (1.0 - a)
+    if backdrop != "greenscreen":
+        comp = apply_light_wrap(comp, alpha_f32, bg, light_wrap)
     return np.clip(comp, 0, 255).astype(np.uint8)
 
 
@@ -221,16 +289,50 @@ def create_ort_session(model_path):
     return ort.InferenceSession(model_path, sess_options=opts, providers=["CPUExecutionProvider"])
 
 
-def run_birefnet_frame(sess, inp_name, rgb_u8):
+def get_ort_session(model_path):
+    key = ("ort", model_path)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = create_ort_session(model_path)
+    return _MODEL_CACHE[key]
+
+
+def get_birefnet_hr(model_dir):
+    key = ("birefnet_hr", model_dir)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = load_birefnet_hr_cuda(model_dir)
+    return _MODEL_CACHE[key]
+
+
+def release_model_cache():
+    torch_mod = None
+    for key, val in list(_MODEL_CACHE.items()):
+        if key[0] == "birefnet_hr" and isinstance(val, tuple):
+            torch_mod = val[0]
+    _MODEL_CACHE.clear()
+    if torch_mod is not None:
+        try:
+            torch_mod.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+def run_birefnet_frame(sess, inp_name, rgb_u8, tta=False):
     h, w = rgb_u8.shape[:2]
     resized = cv2.resize(rgb_u8, (1024, 1024), interpolation=cv2.INTER_CUBIC).astype(np.float32) / 255.0
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-    ten = ((resized - mean) / std).transpose(2, 0, 1)[None, ...].astype(np.float32)
-    out = sess.run(None, {inp_name: ten})[-1]
-    pred = np.squeeze(out).astype(np.float32)
-    if pred.max() > 1.0 or pred.min() < 0.0:
-        pred = 1.0 / (1.0 + np.exp(-np.clip(pred, -25.0, 25.0)))
+
+    def _infer(img_f):
+        ten = ((img_f - mean) / std).transpose(2, 0, 1)[None, ...].astype(np.float32)
+        out = sess.run(None, {inp_name: ten})[-1]
+        p = np.squeeze(out).astype(np.float32)
+        if p.max() > 1.0 or p.min() < 0.0:
+            p = 1.0 / (1.0 + np.exp(-np.clip(p, -25.0, 25.0)))
+        return p
+
+    pred = _infer(resized)
+    if tta:
+        pred = 0.5 * (pred + _infer(np.ascontiguousarray(resized[:, ::-1]))[:, ::-1])
     return cv2.resize(pred, (w, h), interpolation=cv2.INTER_CUBIC)
 
 
@@ -294,35 +396,19 @@ def load_birefnet_hr_cuda(model_dir):
         cfg_dict = json.load(fh)
     cfg = cfg_mod.BiRefNetConfig(**{k: v for k, v in cfg_dict.items() if k in ("bb_pretrained", "is_pretrained") or not k.startswith("_")})
     cfg.bb_pretrained = False
-    model = mod.BiRefNet(cfg)
+    model = mod.BiRefNet(bb_pretrained=False, config=cfg)
     state = load_file(os.path.join(model_dir, "model.safetensors"), device="cpu")
     model.load_state_dict(state, strict=False)
     model.eval().to("cuda").half()
     return torch, model
 
 
-def run_birefnet_hr_frame(torch_mod, model, rgb_u8, max_dim=2048):
-    """Aspect-ratio-preserving high-resolution BiRefNet HR-matting inference in CUDA FP16."""
-    h, w = rgb_u8.shape[:2]
-    # Pick target resolution up to max_dim (minimum 1024 on longest side, multiple of 32)
-    longest = max(w, h)
-    if longest >= 1600 and max_dim >= 2048:
-        target_long = 2048
-    elif longest >= 1100 and max_dim >= 1536:
-        target_long = 1536
-    else:
-        target_long = min(max_dim, 1024)
-    scale = target_long / max(1, longest)
-    tw = max(256, int(round((w * scale) / 32.0)) * 32)
-    th = max(256, int(round((h * scale) / 32.0)) * 32)
-
-    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
-    resized = cv2.resize(rgb_u8, (tw, th), interpolation=interp)
+def _hr_infer(torch_mod, model, resized_u8):
     mean = torch_mod.tensor([0.485, 0.456, 0.406], device="cuda", dtype=torch_mod.float16).view(1, 3, 1, 1)
     std = torch_mod.tensor([0.229, 0.224, 0.225], device="cuda", dtype=torch_mod.float16).view(1, 3, 1, 1)
     with torch_mod.no_grad():
         x = (
-            torch_mod.from_numpy(resized.copy())
+            torch_mod.from_numpy(np.ascontiguousarray(resized_u8))
             .to(device="cuda", dtype=torch_mod.float16)
             .permute(2, 0, 1)
             .unsqueeze(0)
@@ -331,8 +417,21 @@ def run_birefnet_hr_frame(torch_mod, model, rgb_u8, max_dim=2048):
         x = (x - mean) / std
         preds = model(x)
         out = preds[-1].sigmoid() if isinstance(preds, (list, tuple)) else preds.sigmoid()
-        pred = out[0, 0].float().cpu().numpy()
-    return cv2.resize(pred, (w, h), interpolation=cv2.INTER_CUBIC)
+        return out[0, 0].float().cpu().numpy()
+
+
+def run_birefnet_hr_frame(torch_mod, model, rgb_u8, max_dim=2048, tta=False):
+    """Official BiRefNet_HR-matting square inference (2048x2048 or 1536x1536) in CUDA FP16.
+    tta=True runs horizontal mirror flip Test-Time Augmentation at the same native square resolution."""
+    h, w = rgb_u8.shape[:2]
+    sz = 2048 if max_dim >= 2048 else 1536
+    interp = cv2.INTER_AREA if max(w, h) > sz else cv2.INTER_CUBIC
+    resized = cv2.resize(rgb_u8, (sz, sz), interpolation=interp)
+    pred = _hr_infer(torch_mod, model, resized)
+    if tta:
+        pred = 0.5 * (pred + _hr_infer(torch_mod, model, resized[:, ::-1])[:, ::-1])
+    pred = cv2.resize(pred, (w, h), interpolation=cv2.INTER_CUBIC)
+    return np.clip(pred, 0.0, 1.0)
 
 
 def compute_downsample_ratio(w, h):
@@ -365,23 +464,26 @@ def run_image(args):
             custom_bg = cover_resize_rgb(cv2.cvtColor(cbgr, cv2.COLOR_BGR2RGB), w, h)
 
     fgr_u8 = None
+    use_tta = getattr(args, "precision", "max") == "max"
     if args.engine == "birefnet_hr":
-        torch_mod, hr_model = load_birefnet_hr_cuda(args.model)
-        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine})
+        warm = ("birefnet_hr", args.model) in _MODEL_CACHE
+        torch_mod, hr_model = get_birefnet_hr(args.model)
+        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine, "warm": warm, "tta": use_tta})
         try:
-            raw_alpha = run_birefnet_hr_frame(torch_mod, hr_model, rgb, max_dim=2048)
+            raw_alpha = run_birefnet_hr_frame(torch_mod, hr_model, rgb, max_dim=2048, tta=use_tta)
         finally:
+            if not _SERVE_MODE["on"]:
+                release_model_cache()
             try:
-                del hr_model
                 torch_mod.cuda.empty_cache()
             except Exception:
                 pass
     else:
-        sess = create_ort_session(args.model)
-        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine})
+        sess = get_ort_session(args.model)
+        emit({"stage": "BG_INFER", "progress": 38, "engine": args.engine, "tta": use_tta and args.engine == "birefnet"})
         if args.engine == "birefnet":
             inp_name = sess.get_inputs()[0].name
-            raw_alpha = run_birefnet_frame(sess, inp_name, rgb)
+            raw_alpha = run_birefnet_frame(sess, inp_name, rgb, tta=use_tta)
         else:
             src = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
             rec = [np.zeros([1, 1, 1, 1], dtype=np.float32)] * 4
@@ -401,6 +503,8 @@ def run_image(args):
         custom_bg_rgb=custom_bg,
         fgr_u8=fgr_u8,
         decontaminate=bool(args.decontaminate),
+        light_wrap=getattr(args, "light_wrap", 0),
+        harmonize=getattr(args, "harmonize", 0),
     )
     if comp.shape[2] == 4:
         out_cv = cv2.cvtColor(comp, cv2.COLOR_RGBA2BGRA)
@@ -504,6 +608,7 @@ def run_video(args):
     frame_idx = 0
     t_start = time.time()
     last_emit = 0.0
+    video_state = {}
 
     try:
         while True:
@@ -538,7 +643,7 @@ def run_video(args):
                         .numpy()
                     )
             elif use_birefnet_hr:
-                alpha_raw = run_birefnet_hr_frame(torch_mod, torch_model, rgb, max_dim=1280)
+                alpha_raw = run_birefnet_hr_frame(torch_mod, torch_model, rgb, max_dim=1536, tta=False)
             elif use_birefnet:
                 alpha_raw = run_birefnet_frame(ort_sess, ort_inp_name, rgb)
             else:
@@ -560,6 +665,9 @@ def run_video(args):
                 custom_bg_rgb=custom_bg,
                 fgr_u8=fgr_u8,
                 decontaminate=bool(args.decontaminate),
+                light_wrap=getattr(args, "light_wrap", 0),
+                harmonize=getattr(args, "harmonize", 0),
+                state=video_state,
             )
             enc_proc.stdin.write(out_frame.tobytes())
             frame_idx += 1
@@ -607,7 +715,7 @@ def run_video(args):
     emit({"stage": "COMPLETE", "frame": frame_idx, "totalFrames": frame_idx, "progress": 100})
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument("--mode", required=True, choices=["image", "video"])
     p.add_argument("--engine", required=True, choices=["birefnet_hr", "birefnet", "rvm_cuda", "rvm_onnx"])
@@ -620,6 +728,9 @@ def main():
     p.add_argument("--blur-strength", type=int, default=23)
     p.add_argument("--edge-refine", type=float, default=0.0)
     p.add_argument("--decontaminate", type=int, default=1)
+    p.add_argument("--precision", default="max", choices=["standard", "max"])
+    p.add_argument("--light-wrap", type=int, default=0)
+    p.add_argument("--harmonize", type=int, default=0)
     p.add_argument("--ffmpeg", default="ffmpeg")
     p.add_argument("--codec", default="h264_nvenc")
     p.add_argument("--fps", type=float, default=30.0)
@@ -627,7 +738,54 @@ def main():
     p.add_argument("--height", type=int, default=0)
     p.add_argument("--total-frames", type=int, default=0)
     p.add_argument("--has-audio", type=int, default=0)
-    args = p.parse_args()
+    return p
+
+
+def serve():
+    """Warm GPU worker: keeps models resident (VRAM/RAM) and processes JSON-line jobs from stdin.
+    Protocol: {"cmd":"run","id":"<job>","argv":[...CLI args...]} | {"cmd":"ping"} | {"cmd":"unload"} | {"cmd":"exit"}"""
+    _SERVE_MODE["on"] = True
+    parser = build_parser()
+    emit({"stage": "WORKER_READY", "pid": os.getpid()})
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        cmd = req.get("cmd", "run")
+        if cmd == "ping":
+            emit({"stage": "PONG", "models": [k[0] for k in _MODEL_CACHE.keys()]})
+            continue
+        if cmd == "unload":
+            release_model_cache()
+            emit({"stage": "UNLOADED"})
+            continue
+        if cmd == "exit":
+            break
+        _CURRENT_JOB["id"] = str(req.get("id") or "")
+        t0 = time.time()
+        try:
+            args = parser.parse_args([str(a) for a in (req.get("argv") or [])])
+            if args.mode == "image":
+                run_image(args)
+            else:
+                run_video(args)
+            emit({"stage": "JOB_DONE", "ok": True, "elapsedMs": int((time.time() - t0) * 1000)})
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - report every failure back to the daemon
+            emit({"stage": "JOB_DONE", "ok": False, "error": str(exc)[-600:] or exc.__class__.__name__})
+        finally:
+            _CURRENT_JOB["id"] = None
+    release_model_cache()
+
+
+def main():
+    if "--serve" in sys.argv[1:]:
+        serve()
+        return
+    args = build_parser().parse_args()
 
     if args.mode == "image":
         run_image(args)

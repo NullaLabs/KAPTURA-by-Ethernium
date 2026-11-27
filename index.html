@@ -591,6 +591,13 @@
             <option value="0">○ Desactivado (Raw Alpha)</option>
           </select>
         </div>
+        <div class="control-card">
+          <div class="control-label">PRECISIÓN IA</div>
+          <select id="bgPrecisionSelect">
+            <option value="max" selected>🎯 Máxima (TTA espejo + multi-escala en bordes)</option>
+            <option value="standard">⚡ Estándar (1 pasada · más rápido)</option>
+          </select>
+        </div>
         <div class="control-card" style="display:flex; flex-direction:column; justify-content:flex-end">
           <button class="btn btn-primary" id="btnBgRemoveNow" type="button" style="width:100%">🎭 QUITAR FONDO (PREMIUM)</button>
           <button class="btn btn-secondary" id="btnBgPreview2s" type="button" style="width:100%; margin-top:8px" title="Procesa una muestra rápida de 2s y ábrela sobre tablero de transparencia">👁️ PREVIEW 2s EN INSPECTOR</button>
@@ -620,13 +627,23 @@
           <label for="bgChromaBlend" style="margin-left:8px">SUAVIZADO</label>
           <input type="range" id="bgChromaBlend" min="0.01" max="0.35" step="0.01" value="0.08" class="gain-fader" style="width:90px">
         </div>
+        <div class="bg-subitem" id="bgLightWrapWrap" style="display:none" title="Envuelve el borde del sujeto con la luz del nuevo fondo (técnica de composición VFX)">
+          <label for="bgLightWrapRange">💡 LIGHT WRAP (<span id="bgLightWrapVal">45</span>%)</label>
+          <input type="range" id="bgLightWrapRange" min="0" max="100" step="5" value="45" class="gain-fader" style="width:120px">
+        </div>
+        <div class="bg-subitem" id="bgHarmonizeWrap" style="display:none" title="Adapta temperatura, exposición y contraste del sujeto al fondo destino (Lab)">
+          <label for="bgHarmonizeRange">🎨 ARMONIZAR COLOR (<span id="bgHarmonizeVal">35</span>%)</label>
+          <input type="range" id="bgHarmonizeRange" min="0" max="100" step="5" value="35" class="gain-fader" style="width:120px">
+        </div>
       </div>
 
       <div id="bgResult" style="margin-top:16px; display:none; text-align:center">
         <div class="proc-readout" id="bgReadout" style="display:inline-block; text-align:left; max-width:720px; width:100%; margin-bottom:10px; color:var(--emerald)"></div>
-        <div style="margin-bottom:10px">
+        <div style="margin-bottom:10px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap">
           <a class="btn btn-download-pro is-disabled" id="btnDownloadBgRemoved" style="text-decoration:none" aria-disabled="true" download="kaptura_bg_studio">⬇ DESCARGAR RESULTADO</a>
+          <button class="btn btn-secondary" id="btnBgRetouch" type="button" style="display:none" title="Pincel quirúrgico: restaura o borra zonas del recorte con vista alfa y lupa 400%">🖌️ RETOQUE QUIRÚRGICO</button>
         </div>
+        <div id="bgRetouchPanel" class="retouch-panel" style="display:none"></div>
         <div id="bgCompareBox" style="display:none"></div>
       </div>
     </div>
@@ -683,6 +700,7 @@
 <script src="js/daemon-bridge.js"></script>
 <script src="js/preflight.js"></script>
 <script src="js/batch-queue.js"></script>
+<script src="js/matte-brush.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

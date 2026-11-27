@@ -1830,14 +1830,21 @@
     const showBlur = bd === 'bokeh';
     const showImg = bd === 'custom_image';
     const showChroma = eng === 'chroma';
+    const showComposite = showSolid || showBlur || showImg;
     if ($('bgSolidColorWrap')) $('bgSolidColorWrap').style.display = showSolid ? 'flex' : 'none';
     if ($('bgBlurWrap')) $('bgBlurWrap').style.display = showBlur ? 'flex' : 'none';
     if ($('bgCustomImgWrap')) $('bgCustomImgWrap').style.display = showImg ? 'flex' : 'none';
     if ($('bgChromaWrap')) $('bgChromaWrap').style.display = showChroma ? 'flex' : 'none';
+    if ($('bgLightWrapWrap')) $('bgLightWrapWrap').style.display = showComposite ? 'flex' : 'none';
+    if ($('bgHarmonizeWrap')) $('bgHarmonizeWrap').style.display = showComposite ? 'flex' : 'none';
     if ($('bgContextOptions')) {
-      $('bgContextOptions').style.display = (showSolid || showBlur || showImg || showChroma) ? 'flex' : 'none';
+      $('bgContextOptions').style.display = (showComposite || showChroma) ? 'flex' : 'none';
     }
   }
+
+  [['bgLightWrapRange', 'bgLightWrapVal'], ['bgHarmonizeRange', 'bgHarmonizeVal']].forEach(([rId, vId]) => {
+    if ($(rId) && $(vId)) $(rId).addEventListener('input', () => { $(vId).textContent = $(rId).value; });
+  });
 
   if ($('bgBackdropSelect')) $('bgBackdropSelect').addEventListener('change', syncBgContextualControls);
   if ($('bgEngineSelect')) $('bgEngineSelect').addEventListener('change', syncBgContextualControls);
@@ -1892,6 +1899,10 @@
     const keyColor = $('bgChromaColor') ? $('bgChromaColor').value : '#00FF00';
     const similarity = $('bgChromaSim') ? Number($('bgChromaSim').value) : 0.20;
     const blend = $('bgChromaBlend') ? Number($('bgChromaBlend').value) : 0.08;
+    const precision = $('bgPrecisionSelect') ? $('bgPrecisionSelect').value : 'max';
+    const isCompositeBd = backdrop === 'solid' || backdrop === 'bokeh' || backdrop === 'custom_image';
+    const lightWrap = isCompositeBd && $('bgLightWrapRange') ? Number($('bgLightWrapRange').value) : 0;
+    const harmonize = isCompositeBd && $('bgHarmonizeRange') ? Number($('bgHarmonizeRange').value) : 0;
 
     if (backdrop === 'custom_image' && !bgCustomFile) {
       toast('Elige primero una imagen de fondo en 🖼️ ELEGIR IMAGEN DE FONDO.', 'error');
@@ -1944,6 +1955,9 @@
         keyColor,
         similarity,
         blend,
+        precision,
+        lightWrap,
+        harmonize,
         previewSec: previewOnly && !isImgInput ? 2.0 : 0,
         previewStartSec,
         taskId: activeBgTaskId,
@@ -1968,6 +1982,54 @@
         dlBtn.download = outName;
         dlBtn.textContent = `⬇ DESCARGAR ${result.ext.toUpperCase()} (${sizeMB} MB)`;
         dlBtn.onclick = (e) => { e.preventDefault(); downloadBlob(outTarget, outName); };
+      }
+      if ($('bgRetouchPanel')) { $('bgRetouchPanel').style.display = 'none'; $('bgRetouchPanel').innerHTML = ''; }
+      const retouchBtn = $('btnBgRetouch');
+      if (retouchBtn) {
+        const canRetouch = Boolean(result.isImage && backdrop === 'transparent' && window.KapturaMatteBrush);
+        retouchBtn.style.display = canRetouch ? 'inline-flex' : 'none';
+        retouchBtn.onclick = canRetouch ? async () => {
+          const origP = mediaPreviewSrc(activeSrc);
+          const resP = mediaPreviewSrc(result.blob || result);
+          try {
+            await window.KapturaMatteBrush.open($('bgRetouchPanel'), {
+              originalSrc: origP.url,
+              resultSrc: resP.url,
+              onSave: async (editedBlob, meta) => {
+                const editName = outName.replace(/\.png$/i, '_RETOUCHED.png');
+                const editMB = (editedBlob.size / (1024 * 1024)).toFixed(2);
+                if (dlBtn) {
+                  dlBtn.download = editName;
+                  dlBtn.textContent = `⬇ DESCARGAR PNG (${editMB} MB · RETOCADO)`;
+                  dlBtn.onclick = (e) => { e.preventDefault(); downloadBlob(editedBlob, editName); };
+                }
+                if ($('bgReadout')) $('bgReadout').textContent = `🖌️ RETOCADO (${meta.strokes} trazos): ${editName} · ${editMB} MB`;
+                if (window.KapturaComparator && $('bgCompareBox')) {
+                  if (bgAfterRevoke) { bgAfterRevoke(); bgAfterRevoke = null; }
+                  const editedUrl = URL.createObjectURL(editedBlob);
+                  bgAfterRevoke = () => URL.revokeObjectURL(editedUrl);
+                  window.KapturaComparator.render($('bgCompareBox'), {
+                    beforeSrc: origP.url,
+                    afterSrc: editedUrl,
+                    isVideo: false,
+                    beforeLabel: 'ORIGINAL',
+                    afterLabel: 'RETOQUE QUIRÚRGICO (ALPHA)',
+                    integrity: result.integrity || null,
+                    engineLabel: `${result.scaleMode || ''} + Retoque`,
+                    checkerboard: true,
+                  });
+                }
+                await saveToVault({ blob: editedBlob, remoteUrl: null, name: editName, mime: 'image/png', durationSec: 'N/A', sizeBytes: editedBlob.size });
+                toast(`Retoque guardado en Bóveda (${editName}).`, 'success');
+              },
+              onClose: () => { origP.revoke(); resP.revoke(); },
+            });
+          } catch (err) {
+            origP.revoke();
+            resP.revoke();
+            toast(err.message || String(err), 'error');
+          }
+        } : null;
       }
       if ($('bgReadout')) {
         $('bgReadout').textContent = `${previewOnly ? '👁️ PREVIEW 2s · ' : ''}LISTO: ${outName} · ${sizeMB} MB · Motor: ${result.scaleMode}`;

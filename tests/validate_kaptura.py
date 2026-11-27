@@ -88,7 +88,7 @@ required_modules = [
     "js/capabilities.js", "js/gif-encoder.js", "js/lanczos.js", "js/lanczos-gl.js",
     "js/scaler.js", "js/transcoder.js", "js/compressor.js", "js/svg-vector.js",
     "js/upskaletor.js", "js/bg-remover.js", "js/vault.js", "js/capture.js",
-    "js/comparator.js", "js/preflight.js", "js/batch-queue.js", "js/app.js",
+    "js/comparator.js", "js/preflight.js", "js/batch-queue.js", "js/matte-brush.js", "js/app.js",
 ]
 for mod in required_modules:
     if not (ROOT / mod).exists():

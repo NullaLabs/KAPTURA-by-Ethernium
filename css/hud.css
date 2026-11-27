@@ -1754,6 +1754,116 @@ select:focus, input:focus {
 .compare-tag.left { left: 10px; }
 .compare-tag.right { right: 10px; color: var(--emerald); border-color: rgba(0, 255, 157, 0.45); }
 
+/* --- BG STUDIO Surgical Matte Brush & 400% Loupe --- */
+.retouch-panel {
+  margin: 14px auto;
+  max-width: 960px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 255, 157, 0.36);
+  background: linear-gradient(165deg, rgba(6, 12, 22, 0.92), rgba(4, 7, 14, 0.96));
+  backdrop-filter: blur(20px);
+  text-align: left;
+}
+.retouch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--white);
+}
+.retouch-group { display: flex; gap: 6px; align-items: center; }
+.retouch-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.retouch-field input[type="range"] { width: 82px; accent-color: var(--emerald); }
+.retouch-field select {
+  background: rgba(12, 18, 32, 0.92);
+  color: var(--white);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  border-radius: 8px;
+  padding: 3px 6px;
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+}
+.retouch-check { color: var(--cyan); cursor: pointer; }
+.retouch-btn {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--white);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+.retouch-btn.is-active {
+  border-color: var(--emerald);
+  background: rgba(0, 255, 157, 0.16);
+  color: var(--emerald);
+}
+.retouch-btn[data-mode="erase"].is-active {
+  border-color: var(--red);
+  background: rgba(255, 64, 110, 0.16);
+  color: #ff6b8b;
+}
+.retouch-btn.retouch-save {
+  border-color: rgba(0, 240, 255, 0.55);
+  background: rgba(0, 240, 255, 0.14);
+  color: var(--cyan);
+}
+.retouch-stage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #060912;
+  min-height: 220px;
+}
+.retouch-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  cursor: crosshair;
+  touch-action: none;
+}
+.retouch-canvas.is-checker {
+  background-image:
+    linear-gradient(45deg, #232b3e 25%, transparent 25%),
+    linear-gradient(-45deg, #232b3e 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #232b3e 75%),
+    linear-gradient(-45deg, transparent 75%, #232b3e 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: #131926;
+}
+.retouch-loupe {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 2px solid var(--cyan);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.72), 0 0 12px rgba(0, 240, 255, 0.35);
+  z-index: 6;
+}
+.retouch-status {
+  margin-top: 8px;
+  font-family: 'Fira Code', monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
 @media (max-width: 1080px) {
   .zone-divider { display: none; }
 }

@@ -823,6 +823,9 @@
       'X-Kaptura-Bg-Key-Color': opts.keyColor || '#00FF00',
       'X-Kaptura-Bg-Similarity': String(opts.similarity ?? 0.18),
       'X-Kaptura-Bg-Blend': String(opts.blend ?? 0.08),
+      'X-Kaptura-Bg-Precision': opts.precision === 'standard' ? 'standard' : 'max',
+      'X-Kaptura-Bg-Light-Wrap': String(Math.round(Number(opts.lightWrap) || 0)),
+      'X-Kaptura-Bg-Harmonize': String(Math.round(Number(opts.harmonize) || 0)),
       'X-Kaptura-Task-Id': taskId,
     };
     if (opts.codec) headers['X-Kaptura-Codec'] = String(opts.codec);

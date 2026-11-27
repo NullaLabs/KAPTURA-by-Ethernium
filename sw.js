@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kaptura-studio-v3.2.0';
+const CACHE_NAME = 'kaptura-studio-v3.2.1';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -25,6 +25,7 @@ const STATIC_ASSETS = [
   './js/daemon-bridge.js',
   './js/preflight.js',
   './js/batch-queue.js',
+  './js/matte-brush.js',
   './js/app.js',
 ];
 
